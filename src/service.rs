@@ -173,6 +173,10 @@ impl ActivityPubService {
         self.federation_config.to_request_data()
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Returns `(local_actor, deduplicated_inboxes)` for all accepted followers,
     /// excluding blocked actors and blocked domains.
     /// Returns `None` if there are no eligible followers.
@@ -910,6 +914,92 @@ impl ActivityPubService {
         let failures = send_with_retry(sends, &data).await;
         if !failures.is_empty() {
             tracing::warn!(count = failures.len(), "some Undo(Add) deliveries failed");
+        }
+        Ok(())
+    }
+
+    /// Fan out a Create(Note) activity to all accepted followers.
+    /// `note` is the fully-formed Note JSON (including id, type, content, etc.).
+    /// The activity ID is derived deterministically from the note's `id` field.
+    pub async fn broadcast_create_note(
+        &self,
+        local_user_id: uuid::Uuid,
+        note: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        let Some((local_actor, inboxes)) =
+            self.accepted_follower_inboxes(&data, local_user_id).await?
+        else {
+            return Ok(());
+        };
+
+        let note_id_str = note["id"].as_str().unwrap_or("");
+        let create_id = Url::parse(&format!(
+            "{}/activities/create/{}",
+            self.base_url,
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, note_id_str.as_bytes())
+        ))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let create = crate::activities::CreateActivity {
+            id: create_id,
+            kind: Default::default(),
+            actor: ObjectId::from(local_actor.ap_id.clone()),
+            object: note,
+            to: vec![crate::urls::AS_PUBLIC.to_string()],
+            cc: vec![local_actor.followers_url.to_string()],
+            bto: vec![],
+            bcc: vec![],
+        };
+        let sends = SendActivityTask::prepare(
+            &WithContext::new_default(create),
+            &local_actor,
+            inboxes,
+            &data,
+        )
+        .await?;
+        let failures = send_with_retry(sends, &data).await;
+        if !failures.is_empty() {
+            tracing::warn!(count = failures.len(), "some Create(Note) deliveries failed");
+        }
+        Ok(())
+    }
+
+    /// Fan out an Update(Note) activity to all accepted followers.
+    /// `note` is the fully-formed Note JSON.
+    pub async fn broadcast_update_note(
+        &self,
+        local_user_id: uuid::Uuid,
+        note: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        let Some((local_actor, inboxes)) =
+            self.accepted_follower_inboxes(&data, local_user_id).await?
+        else {
+            return Ok(());
+        };
+
+        let update_id = crate::urls::activity_url(&self.base_url)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let update = crate::activities::UpdateActivity {
+            id: update_id,
+            kind: Default::default(),
+            actor: ObjectId::from(local_actor.ap_id.clone()),
+            object: note,
+            to: vec![crate::urls::AS_PUBLIC.to_string()],
+            cc: vec![local_actor.followers_url.to_string()],
+        };
+        let sends = SendActivityTask::prepare(
+            &WithContext::new_default(update),
+            &local_actor,
+            inboxes,
+            &data,
+        )
+        .await?;
+        let failures = send_with_retry(sends, &data).await;
+        if !failures.is_empty() {
+            tracing::warn!(count = failures.len(), "some Update(Note) deliveries failed");
         }
         Ok(())
     }
