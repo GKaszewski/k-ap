@@ -32,6 +32,7 @@ const DELIVERY_INITIAL_DELAY_SECS: u64 = 1;
 const HTTP_FETCH_TIMEOUT_SECS: u64 = 30;
 const BATCH_FETCH_SLEEP_MS: u64 = 100;
 
+#[allow(dead_code)]
 fn content_to_html(text: &str) -> String {
     let escaped = text
         .replace('&', "&amp;")

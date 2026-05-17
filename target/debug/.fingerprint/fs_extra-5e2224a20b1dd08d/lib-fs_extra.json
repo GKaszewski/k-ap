@@ -1,0 +1,1 @@
+{"rustc":7458672600737419911,"features":"[]","declared_features":"[]","target":12526838012358667259,"profile":2225463790103693989,"path":9151378762168650726,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug/.fingerprint/fs_extra-5e2224a20b1dd08d/dep-lib-fs_extra","checksum":false}}],"rustflags":["-C","link-arg=-fuse-ld=mold"],"config":9185878174080762935,"compile_kind":0}
