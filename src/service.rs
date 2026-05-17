@@ -224,6 +224,98 @@ impl ActivityPubService {
         Ok(Some((local_actor, collect_inboxes(&accepted))))
     }
 
+    /// Build an OrderedCollection or OrderedCollectionPage JSON for the local
+    /// user's followers list.  Pass `page = None` for the root collection.
+    pub async fn followers_collection_json(
+        &self,
+        user_id: uuid::Uuid,
+        page: Option<u32>,
+    ) -> anyhow::Result<String> {
+        const AP_CONTEXT: &str = "https://www.w3.org/ns/activitystreams";
+        const PAGE_SIZE: usize = 20;
+        let data = self.federation_config.to_request_data();
+        let collection_id = format!("{}/users/{}/followers", self.base_url, user_id);
+        let total = data.federation_repo.count_followers(user_id).await?;
+        let obj = if let Some(p) = page {
+            let p = p.max(1);
+            let offset = (p.saturating_sub(1) as usize) * PAGE_SIZE;
+            let followers = data
+                .federation_repo
+                .get_followers_page(user_id, offset as u32, PAGE_SIZE)
+                .await?;
+            let has_next = offset + followers.len() < total;
+            let items: Vec<String> = followers.into_iter().map(|f| f.actor.url).collect();
+            let mut obj = serde_json::json!({
+                "@context": AP_CONTEXT,
+                "type": "OrderedCollectionPage",
+                "id": format!("{}?page={}", collection_id, p),
+                "partOf": collection_id,
+                "totalItems": total,
+                "orderedItems": items,
+            });
+            if has_next {
+                obj["next"] =
+                    serde_json::json!(format!("{}?page={}", collection_id, p + 1));
+            }
+            obj
+        } else {
+            serde_json::json!({
+                "@context": AP_CONTEXT,
+                "type": "OrderedCollection",
+                "id": collection_id,
+                "totalItems": total,
+                "first": format!("{}?page=1", collection_id),
+            })
+        };
+        Ok(serde_json::to_string(&obj)?)
+    }
+
+    /// Build an OrderedCollection or OrderedCollectionPage JSON for the local
+    /// user's following list.  Pass `page = None` for the root collection.
+    pub async fn following_collection_json(
+        &self,
+        user_id: uuid::Uuid,
+        page: Option<u32>,
+    ) -> anyhow::Result<String> {
+        const AP_CONTEXT: &str = "https://www.w3.org/ns/activitystreams";
+        const PAGE_SIZE: usize = 20;
+        let data = self.federation_config.to_request_data();
+        let collection_id = format!("{}/users/{}/following", self.base_url, user_id);
+        let total = data.federation_repo.count_following(user_id).await?;
+        let obj = if let Some(p) = page {
+            let p = p.max(1);
+            let offset = (p.saturating_sub(1) as usize) * PAGE_SIZE;
+            let following = data
+                .federation_repo
+                .get_following_page(user_id, offset as u32, PAGE_SIZE)
+                .await?;
+            let has_next = offset + following.len() < total;
+            let items: Vec<String> = following.into_iter().map(|a| a.url).collect();
+            let mut obj = serde_json::json!({
+                "@context": AP_CONTEXT,
+                "type": "OrderedCollectionPage",
+                "id": format!("{}?page={}", collection_id, p),
+                "partOf": collection_id,
+                "totalItems": total,
+                "orderedItems": items,
+            });
+            if has_next {
+                obj["next"] =
+                    serde_json::json!(format!("{}?page={}", collection_id, p + 1));
+            }
+            obj
+        } else {
+            serde_json::json!({
+                "@context": AP_CONTEXT,
+                "type": "OrderedCollection",
+                "id": collection_id,
+                "totalItems": total,
+                "first": format!("{}?page=1", collection_id),
+            })
+        };
+        Ok(serde_json::to_string(&obj)?)
+    }
+
     pub async fn actor_json(&self, user_id_str: &str) -> anyhow::Result<String> {
         use activitypub_federation::traits::Object;
         let uuid = uuid::Uuid::parse_str(user_id_str)?;
