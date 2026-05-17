@@ -1,0 +1,23 @@
+[package]
+name = "k-ap"
+version = "0.1.0"
+edition = "2024"
+description = "Generic ActivityPub protocol layer"
+license = "MIT"
+publish = ["gitea"]
+
+[dependencies]
+tokio             = { version = "1.0", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+futures           = "0.3"
+serde             = { version = "1.0", features = ["derive"] }
+serde_json        = "1.0"
+uuid              = { version = "1.0", features = ["v4", "v5", "serde"] }
+chrono            = { version = "0.4", features = ["serde"] }
+anyhow            = "1.0"
+tracing           = "0.1"
+async-trait       = "0.1"
+axum              = { version = "0.8", features = ["macros"] }
+reqwest           = { version = "0.13", features = ["json"] }
+url               = { version = "2", features = ["serde"] }
+enum_delegate     = "0.2"
+activitypub_federation = "0.7.0-beta.11"
