@@ -228,12 +228,12 @@ impl Object for DbActor {
             following_url,
             ap_id,
             last_refreshed_at: Utc::now(),
-            bio: None,
-            avatar_url: None,
-            banner_url: None,
-            also_known_as: None,
-            profile_url: None,
-            attachment: vec![],
+            bio: user.bio,
+            avatar_url: user.avatar_url,
+            banner_url: user.banner_url,
+            also_known_as: user.also_known_as,
+            profile_url: user.profile_url,
+            attachment: user.attachment,
         }))
     }
 
