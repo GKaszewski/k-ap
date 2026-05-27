@@ -193,6 +193,11 @@ pub async fn get_local_actor(
     })
 }
 
+fn apex_domain(url: &Url) -> String {
+    let host = url.host_str().unwrap_or("");
+    host.strip_prefix("www.").unwrap_or(host).to_owned()
+}
+
 #[async_trait::async_trait]
 impl Object for DbActor {
     type DataType = FederationData;
@@ -319,8 +324,13 @@ impl Object for DbActor {
         expected_domain: &Url,
         _data: &Data<Self::DataType>,
     ) -> Result<(), Self::Error> {
-        verify_domains_match(json.id.inner(), expected_domain)?;
-        Ok(())
+        if verify_domains_match(json.id.inner(), expected_domain).is_ok() {
+            return Ok(());
+        }
+        if apex_domain(json.id.inner()) == apex_domain(expected_domain) {
+            return Ok(());
+        }
+        verify_domains_match(json.id.inner(), expected_domain).map_err(Error::from)
     }
 
     async fn from_json(json: Self::Kind, data: &Data<Self::DataType>) -> Result<Self, Self::Error> {
