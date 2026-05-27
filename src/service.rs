@@ -1203,6 +1203,74 @@ impl ActivityPubService {
         Ok(())
     }
 
+    /// Broadcast a Move activity to all accepted followers, signalling that this
+    /// actor is migrating to `new_actor_url`.
+    ///
+    /// **Pre-condition (caller's responsibility):**
+    /// Before calling this, the application must persist `also_known_as = [new_actor_url]`
+    /// in the local actor's row so the old actor JSON already advertises the new URL
+    /// when remote servers fetch it to verify the cross-reference.
+    pub async fn broadcast_move(
+        &self,
+        user_id: uuid::Uuid,
+        new_actor_url: url::Url,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        let local_actor = get_local_actor(user_id, &data)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let followers = data.federation_repo.get_followers(user_id).await?;
+        let accepted: Vec<_> = followers
+            .into_iter()
+            .filter(|f| f.status == FollowerStatus::Accepted)
+            .collect();
+
+        if accepted.is_empty() {
+            tracing::info!(
+                %user_id,
+                "broadcast_move: no accepted followers, nothing to send"
+            );
+            return Ok(());
+        }
+
+        let inboxes = collect_inboxes(&accepted);
+
+        let move_id =
+            crate::urls::activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let move_activity = crate::activities::MoveActivity {
+            id: move_id,
+            kind: Default::default(),
+            actor: ObjectId::from(local_actor.ap_id.clone()),
+            object: local_actor.ap_id.clone(),
+            target: new_actor_url.clone(),
+        };
+
+        let sends = SendActivityTask::prepare(
+            &WithContext::new_default(move_activity),
+            &local_actor,
+            inboxes,
+            &data,
+        )
+        .await?;
+
+        let failures = send_with_retry(sends, &data).await;
+        if !failures.is_empty() {
+            tracing::warn!(
+                count = failures.len(),
+                "some Move deliveries failed permanently"
+            );
+        }
+
+        tracing::info!(
+            %user_id,
+            target = %new_actor_url,
+            "broadcast_move: delivered to all accepted followers"
+        );
+        Ok(())
+    }
+
     pub async fn block_actor(
         &self,
         local_user_id: uuid::Uuid,
