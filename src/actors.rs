@@ -2,7 +2,6 @@ use activitypub_federation::{
     config::Data,
     fetch::object_id::ObjectId,
     http_signatures::generate_actor_keypair,
-    kinds::actor::PersonType,
     protocol::{public_key::PublicKey, verification::verify_domains_match},
     traits::{Actor, Object},
 };
@@ -58,18 +57,39 @@ pub struct ProfileFieldObject {
     pub value: String,
 }
 
+/// Accepts any AP actor type on inbound JSON; always serializes as "Person" for local actors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ApActorType {
+    Person,
+    Service,
+    Application,
+    Organization,
+    Group,
+}
+
+impl Default for ApActorType {
+    fn default() -> Self {
+        Self::Person
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Person {
     #[serde(rename = "type")]
-    kind: PersonType,
+    kind: ApActorType,
     id: ObjectId<DbActor>,
+    #[serde(default)]
     preferred_username: String,
     inbox: Url,
-    outbox: Url,
-    followers: Url,
-    following: Url,
-    public_key: PublicKey,
+    #[serde(default)]
+    outbox: Option<Url>,
+    #[serde(default)]
+    followers: Option<Url>,
+    #[serde(default)]
+    following: Option<Url>,
+    pub public_key: PublicKey,
+    #[serde(default)]
     name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
@@ -79,6 +99,7 @@ pub struct Person {
     url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none")]
     discoverable: Option<bool>,
+    #[serde(default)]
     manually_approves_followers: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     updated: Option<DateTime<Utc>>,
@@ -275,9 +296,9 @@ impl Object for DbActor {
             id: self.ap_id.clone().into(),
             preferred_username: self.username.clone(),
             inbox: self.inbox_url.clone(),
-            outbox: self.outbox_url.clone(),
-            followers: self.followers_url.clone(),
-            following: self.following_url.clone(),
+            outbox: Some(self.outbox_url.clone()),
+            followers: Some(self.followers_url.clone()),
+            following: Some(self.following_url.clone()),
             public_key,
             name: Some(self.username.clone()),
             summary: self.bio.clone(),
@@ -311,7 +332,7 @@ impl Object for DbActor {
             shared_inbox_url,
             display_name: json.name.clone(),
             avatar_url: json.icon.as_ref().map(|i| i.url.to_string()),
-            outbox_url: Some(json.outbox.to_string()),
+            outbox_url: json.outbox.as_ref().map(|u| u.to_string()),
         };
         data.federation_repo.upsert_remote_actor(actor).await?;
 
@@ -323,9 +344,12 @@ impl Object for DbActor {
             .endpoints
             .as_ref()
             .and_then(|e| Url::parse(e.shared_inbox.as_str()).ok());
-        let outbox_url = json.outbox.clone();
-        let followers_url = json.followers.clone();
-        let following_url = json.following.clone();
+        let fallback = |suffix: &str| {
+            Url::parse(&format!("{}{}", ap_id, suffix)).unwrap_or_else(|_| ap_id.clone())
+        };
+        let outbox_url = json.outbox.clone().unwrap_or_else(|| fallback("/outbox"));
+        let followers_url = json.followers.clone().unwrap_or_else(|| fallback("/followers"));
+        let following_url = json.following.clone().unwrap_or_else(|| fallback("/following"));
 
         Ok(DbActor {
             user_id,
