@@ -25,4 +25,4 @@ pub use repository::{
     BlockedDomain, FederationRepository, Follower, FollowerStatus, FollowingStatus, RemoteActor,
 };
 pub use service::ActivityPubService;
-pub use user::{ApProfileField, ApUser, ApUserRepository};
+pub use user::{ApProfileField, ApUser, ApUserRepository, LookedUpActor};

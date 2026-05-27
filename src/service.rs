@@ -330,6 +330,33 @@ impl ActivityPubService {
         Ok(serde_json::to_string(&WithContext::new_default(person))?)
     }
 
+    /// Resolve a `@user@domain` handle to actor data using a signed HTTP request.
+    /// Unlike a plain unauthenticated fetch, this works with instances (e.g. Threads)
+    /// that require HTTP signatures before returning full actor JSON.
+    pub async fn lookup_actor_by_handle(
+        &self,
+        handle: &str,
+    ) -> anyhow::Result<crate::user::LookedUpActor> {
+        let data = self.federation_config.to_request_data();
+        let actor = Self::webfinger_https(handle, &data).await?;
+        let domain = actor.ap_id.host_str().unwrap_or("").to_string();
+        let handle = format!("{}@{}", actor.username, domain);
+        Ok(crate::user::LookedUpActor {
+            handle,
+            display_name: actor.display_name,
+            bio: actor.bio,
+            avatar_url: actor.avatar_url,
+            banner_url: actor.banner_url,
+            ap_url: actor.ap_id,
+            outbox_url: actor.outbox_url,
+            followers_url: actor.followers_url,
+            following_url: actor.following_url,
+            also_known_as: actor.also_known_as,
+            profile_url: actor.profile_url,
+            attachment: actor.attachment,
+        })
+    }
+
     /// Returns the ActivityPub router compatible with any outer state `S`.
     /// Handlers only use `Data<FederationData>` injected by the middleware layer,
     /// so the router is independent of the application state type.

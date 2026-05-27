@@ -19,6 +19,7 @@ use crate::user::ApProfileField;
 pub struct DbActor {
     pub user_id: uuid::Uuid,
     pub username: String,
+    pub display_name: Option<String>,
     pub public_key_pem: String,
     pub private_key_pem: Option<String>,
     pub inbox_url: Url,
@@ -152,6 +153,7 @@ pub async fn get_local_actor(
     Ok(DbActor {
         user_id,
         username: user.username,
+        display_name: None,
         public_key_pem: public_key,
         private_key_pem: Some(private_key),
         inbox_url,
@@ -219,6 +221,7 @@ impl Object for DbActor {
         Ok(Some(DbActor {
             user_id,
             username: user.username,
+            display_name: None,
             public_key_pem: public_key,
             private_key_pem: private_key,
             inbox_url,
@@ -327,6 +330,7 @@ impl Object for DbActor {
         Ok(DbActor {
             user_id,
             username: json.preferred_username.clone(),
+            display_name: json.name.clone(),
             public_key_pem: json.public_key.public_key_pem,
             private_key_pem: None,
             inbox_url,
