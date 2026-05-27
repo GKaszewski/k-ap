@@ -131,4 +131,12 @@ pub trait FederationRepository: Send + Sync {
     async fn remove_blocked_actor(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<()>;
     async fn get_blocked_actors(&self, local_user_id: uuid::Uuid) -> Result<Vec<String>>;
     async fn is_actor_blocked(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<bool>;
+    /// Migrate all local following records from old_actor_url to new_actor_url.
+    /// Returns the local user IDs whose records were migrated (excludes users
+    /// already following the new actor — they need no re-follow).
+    async fn migrate_follower_actor(
+        &self,
+        old_actor_url: &str,
+        new_actor_url: &str,
+    ) -> Result<Vec<uuid::Uuid>>;
 }
