@@ -328,12 +328,22 @@ impl Object for DbActor {
             return Ok(());
         }
         if apex_domain(json.id.inner()) == apex_domain(expected_domain) {
+            tracing::debug!(
+                actor_id = %json.id.inner(),
+                expected = %expected_domain,
+                "domain verified via www-apex equivalence"
+            );
             return Ok(());
         }
         verify_domains_match(json.id.inner(), expected_domain).map_err(Error::from)
     }
 
     async fn from_json(json: Self::Kind, data: &Data<Self::DataType>) -> Result<Self, Self::Error> {
+        tracing::debug!(
+            actor_id = %json.id.inner(),
+            username = %json.preferred_username,
+            "ingesting remote actor"
+        );
         let shared_inbox_url = json.endpoints.as_ref().map(|e| e.shared_inbox.to_string());
         let actor = RemoteActor {
             url: json.id.inner().to_string(),

@@ -337,10 +337,13 @@ impl ActivityPubService {
         &self,
         handle: &str,
     ) -> anyhow::Result<crate::user::LookedUpActor> {
+        tracing::info!(handle, "looking up remote actor");
         let data = self.federation_config.to_request_data();
-        let actor = Self::webfinger_https(handle, &data).await?;
+        let actor = Self::webfinger_https(handle, &data).await
+            .inspect_err(|e| tracing::warn!(handle, error = %e, "actor lookup failed"))?;
         let domain = actor.ap_id.host_str().unwrap_or("").to_string();
         let handle = format!("{}@{}", actor.username, domain);
+        tracing::info!(handle, ap_url = %actor.ap_id, "remote actor resolved");
         Ok(crate::user::LookedUpActor {
             handle,
             display_name: actor.display_name,
@@ -597,6 +600,7 @@ impl ActivityPubService {
             "https://{}/.well-known/webfinger?resource=acct:{}@{}",
             domain_str, user, domain_str
         );
+        tracing::debug!(handle, wf_url, "resolving webfinger");
         let wf: serde_json::Value = reqwest::Client::new()
             .get(&wf_url)
             .header("Accept", "application/jrd+json, application/json")
@@ -615,6 +619,7 @@ impl ActivityPubService {
             .and_then(|l| l["href"].as_str())
             .ok_or_else(|| anyhow::anyhow!("no self link in WebFinger response"))?
             .to_owned();
+        tracing::debug!(handle, self_href, "webfinger resolved, fetching actor with signature");
         let self_url = url::Url::parse(&self_href)?;
         let actor: DbActor = ObjectId::from(self_url)
             .dereference(data)
