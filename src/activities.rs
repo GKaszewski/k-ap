@@ -65,12 +65,20 @@ impl Activity for FollowActivity {
                 )));
             }
         };
-        if target_domain != data.domain {
-            return Err(Error::bad_request(anyhow::anyhow!(
-                "follow target is not a local actor"
-            )));
+        if target_domain == data.domain {
+            return Ok(());
         }
-        Ok(())
+        // Domain mismatch — still accept if the UUID resolves to a local user.
+        // This handles domain migrations where remote servers have cached the old actor URL.
+        if let Some(uuid) = crate::urls::extract_user_id_from_url(target_url) {
+            if data.user_repo.find_by_id(uuid).await.ok().flatten().is_some() {
+                tracing::debug!(target = %target_url, local_domain = %data.domain, "accepting follow for migrated actor URL");
+                return Ok(());
+            }
+        }
+        Err(Error::bad_request(anyhow::anyhow!(
+            "follow target is not a local actor"
+        )))
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
