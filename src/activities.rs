@@ -837,10 +837,86 @@ impl Activity for MoveActivity {
         if data.federation_repo.is_domain_blocked(domain).await? {
             return Ok(());
         }
+
+        // Fetch the target actor via signed request.
+        let target = ObjectId::<DbActor>::from(self.target.clone())
+            .dereference(data)
+            .await
+            .map_err(|e| Error::from(anyhow::anyhow!("{e}")))?;
+
+        // Verify the new actor claims the old identity via alsoKnownAs.
+        let old_url = self.object.as_str();
+        if target.also_known_as.as_deref() != Some(old_url) {
+            return Err(Error::bad_request(anyhow::anyhow!(
+                "Move target alsoKnownAs does not reference old actor"
+            )));
+        }
+
+        // Migrate DB records; get user IDs that need a re-follow.
+        let affected = data
+            .federation_repo
+            .migrate_follower_actor(old_url, self.target.as_str())
+            .await
+            .map_err(|e| Error::from(anyhow::anyhow!("{e}")))?;
+
+        let affected_count = affected.len();
+
+        // Re-follow on behalf of each affected local user.
+        for local_user_id in &affected {
+            let local_actor = match crate::actors::get_local_actor(*local_user_id, data).await {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(error = %e, %local_user_id, "Move: failed to load local actor for re-follow");
+                    continue;
+                }
+            };
+
+            let follow_id = match crate::urls::activity_url(&data.base_url) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Move: failed to generate follow activity URL");
+                    continue;
+                }
+            };
+
+            let follow = FollowActivity {
+                id: follow_id,
+                kind: Default::default(),
+                actor: activitypub_federation::fetch::object_id::ObjectId::from(
+                    local_actor.ap_id.clone(),
+                ),
+                object: activitypub_federation::fetch::object_id::ObjectId::from(
+                    self.target.clone(),
+                ),
+            };
+
+            let sends = match activitypub_federation::activity_sending::SendActivityTask::prepare(
+                &activitypub_federation::protocol::context::WithContext::new_default(follow),
+                &local_actor,
+                vec![target.inbox_url.clone()],
+                data,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Move: failed to prepare re-follow");
+                    continue;
+                }
+            };
+
+            for send in sends {
+                if let Err(e) = send.sign_and_send(data).await {
+                    tracing::warn!(error = %e, %local_user_id, "Move: re-follow delivery failed");
+                }
+            }
+        }
+
         tracing::info!(
             actor = %self.actor.inner(),
             target = %self.target,
-            "received Move (account migration) — target noted"
+            affected = affected_count,
+            "received Move — migrated follower relationships"
         );
         Ok(())
     }
