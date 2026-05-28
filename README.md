@@ -10,7 +10,7 @@ Not domain-specific — no opinions about what your content type looks like.
 
 ```toml
 [dependencies]
-k-ap = { git = "https://git.gabrielkaszewski.dev/GKaszewski/k-ap.git", tag = "v0.1.0" }
+k-ap = { git = "https://git.gabrielkaszewski.dev/GKaszewski/k-ap.git", tag = "v0.1.10" }
 ```
 
 ## What you implement
@@ -21,7 +21,7 @@ Three traits wire your data layer into `k-ap`:
 // Your database layer for follows, keypairs, remote actors, blocks
 impl FederationRepository for MyFederationRepo { ... }
 
-// Your user lookup (id, username, bio, avatar)
+// Your user lookup (id, username, bio, avatar, alsoKnownAs)
 impl ApUserRepository for MyUserRepo { ... }
 
 // Dispatch incoming AP objects to the right handler
@@ -55,28 +55,55 @@ let router = Router::new().merge(service.router());
 - **Outbox** — `GET /users/:id/outbox` with OrderedCollection pagination
 - **Followers / Following** — `GET /users/:id/followers` and `/following`
 - **WebFinger** — `GET /.well-known/webfinger`
-- **NodeInfo** — `GET /.well-known/nodeinfo` + `GET /nodeinfo/2.1`
+- **NodeInfo** — `GET /.well-known/nodeinfo` + `GET /nodeinfo/2.0`
 
 ## Broadcast from your domain layer
 
 ```rust
 // Fan out a new note to all accepted followers
-service.broadcast_create_note(user_id, &note_json).await?;
-service.broadcast_update_note(user_id, &note_json).await?;
+service.broadcast_create_note(user_id, note_json).await?;
+service.broadcast_update_note(user_id, note_json).await?;
+service.broadcast_delete_to_followers(user_id, ap_id).await?;
 
 // Announce / Undo Announce
 service.broadcast_announce_to_followers(user_id, object_ap_id).await?;
-service.broadcast_undo_announce_to_followers(user_id, object_ap_id, object_url).await?;
+service.broadcast_undo_announce_to_followers(user_id, object_ap_id).await?;
 
 // Like / Unlike to a remote inbox
 service.broadcast_like_to_inbox(user_id, object_ap_id, inbox_url).await?;
 service.broadcast_undo_like_to_inbox(user_id, object_ap_id, inbox_url).await?;
 
-// Follow / Unfollow / Accept / Reject
-service.follow(local_user_id, remote_actor_url, handle).await?;
+// Actor profile update
+service.broadcast_actor_update(user_id).await?;
+
+// Account migration — sends a Move activity to all followers
+// Pre-condition: set alsoKnownAs on the local actor before calling this
+service.broadcast_move(user_id, new_actor_url).await?;
+```
+
+## Follow management
+
+```rust
+// Outbound follows (resolves handle via WebFinger)
+service.follow(local_user_id, "@user@remote.example").await?;
 service.unfollow(local_user_id, remote_actor_url).await?;
+
+// Inbound follow requests — full flow (DB update + AP delivery + backfill)
 service.accept_follower(local_user_id, remote_actor_url).await?;
 service.reject_follower(local_user_id, remote_actor_url).await?;
+
+// Inbound follow requests — DB only (no AP delivery)
+// Use these when delivering Accept/Reject from a separate worker process
+service.mark_follower_accepted(local_user_id, remote_actor_url).await?;
+service.mark_follower_rejected(local_user_id, remote_actor_url).await?;
+```
+
+## Actor lookup
+
+```rust
+// Resolve a handle via WebFinger using a signed HTTP request.
+// Works with strict instances (e.g. Threads) that require HTTP signatures.
+let actor: LookedUpActor = service.lookup_actor_by_handle("@user@remote.example").await?;
 ```
 
 ## Project-specific ports
@@ -92,8 +119,19 @@ service.reject_follower(local_user_id, remote_actor_url).await?;
 | `FederationRepository` | Trait: follows, keypairs, remote actors, blocks |
 | `ApUserRepository` | Trait: user lookup by id / username |
 | `ApObjectHandler` | Trait: dispatch incoming AP objects |
+| `LookedUpActor` | Resolved remote actor data from `lookup_actor_by_handle` |
 | `RemoteActor` | A federated actor record |
 | `Follower` / `FollowerStatus` | Follower with pending/accepted/rejected state |
-| `ApUser` | AP-serializable local user |
+| `ApUser` | AP-serializable local user (includes `also_known_as`) |
 | `ApFederationConfig` | Wraps the `activitypub_federation` config |
 | `Error` | AP-layer error type |
+
+## Inbound activity handling
+
+The library handles the following inbound AP activities out of the box:
+
+`Follow`, `Accept`, `Reject`, `Undo` (Follow, Like, Announce), `Create`, `Update`, `Delete`, `Announce`, `Like`, `Add`, `Block`, `Move`
+
+`Move` is fully handled: verifies `alsoKnownAs` cross-reference on the target actor, migrates all local following records, and re-follows the new actor on behalf of affected users.
+
+Actor types accepted: `Person`, `Service`, `Application`, `Organization`, `Group`.
