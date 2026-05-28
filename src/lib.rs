@@ -25,7 +25,7 @@ pub use repository::{
     BlockedDomain, FederationRepository, Follower, FollowerStatus, FollowingStatus, RemoteActor,
 };
 pub use service::ActivityPubService;
-pub use user::{ApActorType, ApProfileField, ApUser, ApUserRepository, LookedUpActor};
+pub use user::{ApActorType, ApProfileField, ApUser, ApUserRepository, ApVisibility, LookedUpActor};
 
 #[cfg(test)]
 #[path = "tests/integration.rs"]

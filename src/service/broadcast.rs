@@ -8,6 +8,7 @@ use crate::{
     },
     actors::get_local_actor,
     urls::activity_url,
+    user::ApVisibility,
 };
 
 use super::ActivityPubService;
@@ -168,7 +169,11 @@ impl ActivityPubService {
         &self,
         local_user_id: uuid::Uuid,
         note: serde_json::Value,
+        visibility: ApVisibility,
     ) -> anyhow::Result<()> {
+        if visibility == ApVisibility::Private {
+            return Ok(());
+        }
         let data = self.federation_config.to_request_data();
         let Some((local_actor, inboxes)) = self.accepted_follower_inboxes(&data, local_user_id).await? else { return Ok(()); };
         let note_id_str = note["id"].as_str().unwrap_or("");
@@ -177,13 +182,14 @@ impl ActivityPubService {
             self.base_url,
             uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, note_id_str.as_bytes())
         )).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let (to, cc) = visibility_addressing(visibility, &local_actor.followers_url);
         let create = CreateActivity {
             id: create_id,
             kind: Default::default(),
             actor: ObjectId::from(local_actor.ap_id.clone()),
             object: note,
-            to: vec![crate::urls::AS_PUBLIC.to_string()],
-            cc: vec![local_actor.followers_url.to_string()],
+            to,
+            cc,
             bto: vec![],
             bcc: vec![],
         };
@@ -195,16 +201,21 @@ impl ActivityPubService {
         &self,
         local_user_id: uuid::Uuid,
         note: serde_json::Value,
+        visibility: ApVisibility,
     ) -> anyhow::Result<()> {
+        if visibility == ApVisibility::Private {
+            return Ok(());
+        }
         let data = self.federation_config.to_request_data();
         let Some((local_actor, inboxes)) = self.accepted_follower_inboxes(&data, local_user_id).await? else { return Ok(()); };
+        let (to, cc) = visibility_addressing(visibility, &local_actor.followers_url);
         let update = crate::activities::UpdateActivity {
             id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
             kind: Default::default(),
             actor: ObjectId::from(local_actor.ap_id.clone()),
             object: note,
-            to: vec![crate::urls::AS_PUBLIC.to_string()],
-            cc: vec![local_actor.followers_url.to_string()],
+            to,
+            cc,
         };
         let (json, sends, inboxes) = self.prepare_broadcast(&data, &local_actor, inboxes, update).await?;
         self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json).await
@@ -255,5 +266,24 @@ impl ActivityPubService {
         self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json).await?;
         tracing::info!(%user_id, target = %new_actor_url, "broadcast_move: dispatched");
         Ok(())
+    }
+}
+
+/// Returns `(to, cc)` addressing for the given visibility.
+/// `Private` is handled before calling this (early return in broadcast methods).
+pub(super) fn visibility_addressing(
+    visibility: ApVisibility,
+    followers_url: &Url,
+) -> (Vec<String>, Vec<String>) {
+    match visibility {
+        ApVisibility::Public => (
+            vec![crate::urls::AS_PUBLIC.to_string()],
+            vec![followers_url.to_string()],
+        ),
+        ApVisibility::FollowersOnly => (
+            vec![followers_url.to_string()],
+            vec![],
+        ),
+        ApVisibility::Private => (vec![], vec![]),
     }
 }

@@ -8,6 +8,22 @@ pub struct ApProfileField {
     pub value: String,
 }
 
+/// Visibility of a federated post.
+///
+/// Controls the `to`/`cc` addressing fields of outbound Create/Update activities
+/// and whether the library fans the activity out to followers at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApVisibility {
+    /// `to: [AS_PUBLIC], cc: [followers]` — fully public, indexable by search engines.
+    #[default]
+    Public,
+    /// `to: [followers], cc: []` — only followers receive it, not indexed publicly.
+    FollowersOnly,
+    /// No federation delivery. The library returns immediately without sending anything.
+    /// Use when the post should exist only on the local instance.
+    Private,
+}
+
 /// Actor type for AP serialization. Defaults to `Person`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApActorType {
