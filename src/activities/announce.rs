@@ -1,7 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    protocol::verification::verify_domains_match,
+    config::Data, fetch::object_id::ObjectId, protocol::verification::verify_domains_match,
     traits::Activity,
 };
 use serde::{Deserialize, Serialize};
@@ -37,8 +35,12 @@ impl Activity for AnnounceActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         verify_domains_match(&self.id, self.actor.inner())?;
@@ -53,7 +55,9 @@ impl Activity for AnnounceActivity {
             data.object_handler
                 .on_announce_of_remote(&self.object, self.actor.inner())
                 .await
-                .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to process cross-server announce"));
+                .unwrap_or_else(
+                    |e| tracing::warn!(error = %e, "failed to process cross-server announce"),
+                );
             tracing::debug!(actor = %self.actor.inner(), object = %self.object, "received Announce of non-local object");
             return Ok(());
         }
@@ -68,7 +72,9 @@ impl Activity for AnnounceActivity {
         data.object_handler
             .on_announce_received(&self.object, self.actor.inner())
             .await
-            .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to process announce notification"));
+            .unwrap_or_else(
+                |e| tracing::warn!(error = %e, "failed to process announce notification"),
+            );
         tracing::info!(actor = %self.actor.inner(), object = %self.object, "received announce");
         Ok(())
     }

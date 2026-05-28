@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use crate::content::{ApContentReader, ApObjectHandler};
-use crate::repository::{ActivityRepository, ActorRepository, BlocklistRepository, FollowRepository};
+use crate::repository::{
+    ActivityRepository, ActorRepository, BlocklistRepository, FollowRepository,
+};
 use crate::user::ApUserRepository;
 
 /// Typed event emitted by the federation layer.

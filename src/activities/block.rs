@@ -1,7 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    protocol::verification::verify_domains_match,
+    config::Data, fetch::object_id::ObjectId, protocol::verification::verify_domains_match,
     traits::Activity,
 };
 use serde::{Deserialize, Serialize};
@@ -32,8 +30,12 @@ impl Activity for BlockActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         verify_domains_match(&self.id, self.actor.inner())?;
@@ -45,8 +47,14 @@ impl Activity for BlockActivity {
             return Ok(());
         }
         if let Some(local_user_id) = crate::urls::extract_user_id_from_url(&self.object) {
-            let _ = data.follow_repo.remove_following(local_user_id, self.actor.inner().as_str()).await;
-            let _ = data.follow_repo.remove_follower(local_user_id, self.actor.inner().as_str()).await;
+            let _ = data
+                .follow_repo
+                .remove_following(local_user_id, self.actor.inner().as_str())
+                .await;
+            let _ = data
+                .follow_repo
+                .remove_follower(local_user_id, self.actor.inner().as_str())
+                .await;
         }
         tracing::info!(actor = %self.actor.inner(), "received block — removed following and follower");
         Ok(())

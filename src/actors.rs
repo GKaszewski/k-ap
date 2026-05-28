@@ -140,11 +140,7 @@ pub async fn get_local_actor(
         .map_err(Error::from)?
         .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found: {}", user_id)))?;
 
-    let (public_key, private_key) = match data
-        .actor_repo
-        .get_local_actor_keypair(user_id)
-        .await?
-    {
+    let (public_key, private_key) = match data.actor_repo.get_local_actor_keypair(user_id).await? {
         Some(kp) => kp,
         None => {
             let kp = generate_actor_keypair()?;
@@ -230,10 +226,7 @@ impl Object for DbActor {
             _ => return Ok(None),
         };
 
-        let keypair = data
-            .actor_repo
-            .get_local_actor_keypair(user_id)
-            .await?;
+        let keypair = data.actor_repo.get_local_actor_keypair(user_id).await?;
 
         let (public_key, private_key) = match keypair {
             Some(kp) => (kp.0, Some(kp.1)),
@@ -377,8 +370,14 @@ impl Object for DbActor {
             Url::parse(&format!("{}{}", ap_id, suffix)).unwrap_or_else(|_| ap_id.clone())
         };
         let outbox_url = json.outbox.clone().unwrap_or_else(|| fallback("/outbox"));
-        let followers_url = json.followers.clone().unwrap_or_else(|| fallback("/followers"));
-        let following_url = json.following.clone().unwrap_or_else(|| fallback("/following"));
+        let followers_url = json
+            .followers
+            .clone()
+            .unwrap_or_else(|| fallback("/followers"));
+        let following_url = json
+            .following
+            .clone()
+            .unwrap_or_else(|| fallback("/following"));
 
         Ok(DbActor {
             user_id,

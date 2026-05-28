@@ -1,7 +1,4 @@
-use activitypub_federation::{
-    config::Data,
-    fetch::webfinger::{extract_webfinger_name},
-};
+use activitypub_federation::{config::Data, fetch::webfinger::extract_webfinger_name};
 use axum::{
     extract::Query,
     http::header,

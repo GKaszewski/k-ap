@@ -1,8 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    kinds::activity::CreateType,
-    traits::Activity,
+    config::Data, fetch::object_id::ObjectId, kinds::activity::CreateType, traits::Activity,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -36,8 +33,12 @@ impl Activity for CreateActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if let Some(attributed_to) = self.object.get("attributedTo").and_then(|v| v.as_str())

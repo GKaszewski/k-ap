@@ -51,17 +51,9 @@ pub trait ApObjectHandler: Send + Sync {
 
     async fn on_unlike(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
-    async fn on_announce_received(
-        &self,
-        object_url: &Url,
-        actor_url: &Url,
-    ) -> anyhow::Result<()>;
+    async fn on_announce_received(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
-    async fn on_announce_of_remote(
-        &self,
-        object_url: &Url,
-        actor_url: &Url,
-    ) -> anyhow::Result<()>;
+    async fn on_announce_of_remote(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
     async fn on_mention(
         &self,

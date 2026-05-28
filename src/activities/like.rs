@@ -1,7 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    protocol::verification::verify_domains_match,
+    config::Data, fetch::object_id::ObjectId, protocol::verification::verify_domains_match,
     traits::Activity,
 };
 use serde::{Deserialize, Serialize};
@@ -18,7 +16,9 @@ use super::helpers::check_guards;
 pub struct LikeType;
 
 impl Default for LikeType {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -36,8 +36,12 @@ impl Activity for LikeActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         verify_domains_match(&self.id, self.actor.inner())?;

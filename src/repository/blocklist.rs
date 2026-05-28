@@ -13,23 +13,8 @@ pub trait BlocklistRepository: Send + Sync {
     async fn is_domain_blocked(&self, domain: &str) -> Result<bool>;
 
     // ── Per-user actor blocklist ────────────────────────────────────────────
-    async fn add_blocked_actor(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> Result<()>;
-    async fn remove_blocked_actor(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> Result<()>;
-    async fn get_blocked_actors(
-        &self,
-        local_user_id: uuid::Uuid,
-    ) -> Result<Vec<String>>;
-    async fn is_actor_blocked(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> Result<bool>;
+    async fn add_blocked_actor(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<()>;
+    async fn remove_blocked_actor(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<()>;
+    async fn get_blocked_actors(&self, local_user_id: uuid::Uuid) -> Result<Vec<String>>;
+    async fn is_actor_blocked(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<bool>;
 }

@@ -1,25 +1,34 @@
-use activitypub_federation::{activity_sending::SendActivityTask, fetch::object_id::ObjectId, protocol::context::WithContext};
+use activitypub_federation::{
+    activity_sending::SendActivityTask, fetch::object_id::ObjectId, protocol::context::WithContext,
+};
 use url::Url;
 
-use crate::{
-    activities::CreateActivity,
-    actors::get_local_actor,
-    federation::ApFederationConfig,
-};
+use crate::{activities::CreateActivity, actors::get_local_actor, federation::ApFederationConfig};
 
 use super::{ActivityPubService, delivery::send_with_retry};
 
 impl ActivityPubService {
     pub async fn backfill_outbox(&self, outbox_url: &str, actor_url: &str) -> anyhow::Result<()> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(super::HTTP_FETCH_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(
+                super::HTTP_FETCH_TIMEOUT_SECS,
+            ))
             .build()?;
         let data = self.federation_config.to_request_data();
         let actor = url::Url::parse(actor_url)?;
-        let root: serde_json::Value = client.get(outbox_url).header("Accept", "application/activity+json").send().await?.json().await?;
+        let root: serde_json::Value = client
+            .get(outbox_url)
+            .header("Accept", "application/activity+json")
+            .send()
+            .await?
+            .json()
+            .await?;
         let first = match root.get("first").and_then(|v| v.as_str()) {
             Some(url) => url.to_string(),
-            None => { tracing::debug!(outbox = %outbox_url, "outbox has no first page"); return Ok(()); }
+            None => {
+                tracing::debug!(outbox = %outbox_url, "outbox has no first page");
+                return Ok(());
+            }
         };
         let mut current_url = first;
         let mut visited = std::collections::HashSet::new();
@@ -28,16 +37,40 @@ impl ActivityPubService {
                 tracing::warn!(url = %current_url, "backfill: loop detected, stopping");
                 break;
             }
-            let page: serde_json::Value = match client.get(&current_url).header("Accept", "application/activity+json").send().await {
-                Ok(resp) => match resp.json().await { Ok(v) => v, Err(e) => { tracing::error!(error = %e, "backfill: failed to parse page JSON"); break; } },
-                Err(e) => { tracing::error!(error = %e, "backfill: HTTP request failed"); break; }
+            let page: serde_json::Value = match client
+                .get(&current_url)
+                .header("Accept", "application/activity+json")
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!(error = %e, "backfill: failed to parse page JSON");
+                        break;
+                    }
+                },
+                Err(e) => {
+                    tracing::error!(error = %e, "backfill: HTTP request failed");
+                    break;
+                }
             };
             if let Some(items) = page.get("orderedItems").and_then(|v| v.as_array()) {
                 for item in items {
                     let activity_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    if activity_type != "Create" && activity_type != "Add" { continue; }
-                    let Some(object) = item.get("object").filter(|o| o.is_object()).cloned() else { continue };
-                    let Some(ap_id) = object.get("id").and_then(|v| v.as_str()).and_then(|s| url::Url::parse(s).ok()) else { continue };
+                    if activity_type != "Create" && activity_type != "Add" {
+                        continue;
+                    }
+                    let Some(object) = item.get("object").filter(|o| o.is_object()).cloned() else {
+                        continue;
+                    };
+                    let Some(ap_id) = object
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| url::Url::parse(s).ok())
+                    else {
+                        continue;
+                    };
                     if let Err(e) = data.object_handler.on_create(&ap_id, &actor, object).await {
                         tracing::warn!(ap_id = %ap_id, error = %e, "backfill: failed to process item");
                     }
@@ -60,7 +93,16 @@ impl ActivityPubService {
         let max_attempts = self.delivery_max_attempts;
         let initial_delay = self.delivery_initial_delay_secs;
         tokio::spawn(async move {
-            if let Err(e) = ActivityPubService::run_backfill(config, base_url, owner_user_id, follower_inbox_url, max_attempts, initial_delay).await {
+            if let Err(e) = ActivityPubService::run_backfill(
+                config,
+                base_url,
+                owner_user_id,
+                follower_inbox_url,
+                max_attempts,
+                initial_delay,
+            )
+            .await
+            {
                 tracing::warn!(error = %e, "backfill: task failed");
             }
         });
@@ -76,7 +118,9 @@ impl ActivityPubService {
     ) -> anyhow::Result<()> {
         const BATCH_SIZE: usize = 20;
         let data = config.to_request_data();
-        let local_actor = get_local_actor(owner_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(owner_user_id, &data)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let inbox = Url::parse(&follower_inbox_url)?;
 
         // Cursor-based pagination via get_local_objects_page (newest-first).
@@ -105,18 +149,27 @@ impl ActivityPubService {
                     uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, ap_id.as_str().as_bytes())
                 ))?;
                 let create = CreateActivity {
-                    id: create_id, kind: Default::default(),
+                    id: create_id,
+                    kind: Default::default(),
                     actor: ObjectId::from(local_actor.ap_id.clone()),
-                    object: object_json.clone(), to: vec![], cc: vec![], bto: vec![], bcc: vec![],
+                    object: object_json.clone(),
+                    to: vec![],
+                    cc: vec![],
+                    bto: vec![],
+                    bcc: vec![],
                 };
                 let sends = SendActivityTask::prepare(
                     &WithContext::new_default(create),
                     &local_actor,
                     vec![inbox.clone()],
                     &data,
-                ).await?;
+                )
+                .await?;
                 total += 1;
-                if send_with_retry(sends, &data, max_attempts, initial_delay).await.is_empty() {
+                if send_with_retry(sends, &data, max_attempts, initial_delay)
+                    .await
+                    .is_empty()
+                {
                     success_count += 1;
                 } else {
                     failure_count += 1;
@@ -127,7 +180,10 @@ impl ActivityPubService {
                 break;
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(super::BATCH_FETCH_SLEEP_MS)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                super::BATCH_FETCH_SLEEP_MS,
+            ))
+            .await;
         }
 
         tracing::info!(

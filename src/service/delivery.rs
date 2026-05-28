@@ -57,13 +57,23 @@ impl Activity for RawActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { &self.actor_url }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        &self.actor_url
+    }
 
-    async fn verify(&self, _data: &activitypub_federation::config::Data<Self::DataType>) -> Result<(), Self::Error> {
+    async fn verify(
+        &self,
+        _data: &activitypub_federation::config::Data<Self::DataType>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
-    async fn receive(self, _data: &activitypub_federation::config::Data<Self::DataType>) -> Result<(), Self::Error> {
+    async fn receive(
+        self,
+        _data: &activitypub_federation::config::Data<Self::DataType>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -96,8 +106,7 @@ impl ActivityPubService {
             let max_attempts = self.delivery_max_attempts;
             let initial_delay = self.delivery_initial_delay_secs;
             tokio::spawn(async move {
-                let failures =
-                    send_with_retry(sends, &data, max_attempts, initial_delay).await;
+                let failures = send_with_retry(sends, &data, max_attempts, initial_delay).await;
                 if !failures.is_empty() {
                     tracing::warn!(count = failures.len(), "some deliveries failed permanently");
                 }
@@ -128,9 +137,12 @@ impl ActivityPubService {
             .and_then(|v| v.as_str())
             .and_then(|s| Url::parse(s).ok())
             .unwrap_or_else(|| actor.ap_id.clone());
-        let raw = RawActivity { id, actor_url, value: activity.clone() };
-        let sends =
-            SendActivityTask::prepare(&raw, &actor, vec![inbox.clone()], &data).await?;
+        let raw = RawActivity {
+            id,
+            actor_url,
+            value: activity.clone(),
+        };
+        let sends = SendActivityTask::prepare(&raw, &actor, vec![inbox.clone()], &data).await?;
         let failures = send_with_retry(
             sends,
             &data,
@@ -172,7 +184,8 @@ impl ActivityPubService {
     where
         A: Activity + Serialize + Debug + Send + Sync,
     {
-        let with_ctx = activitypub_federation::protocol::context::WithContext::new_default(activity);
+        let with_ctx =
+            activitypub_federation::protocol::context::WithContext::new_default(activity);
         let activity_json = serde_json::to_value(&with_ctx)?;
         let sends =
             SendActivityTask::prepare(&with_ctx, local_actor, inboxes.clone(), data).await?;

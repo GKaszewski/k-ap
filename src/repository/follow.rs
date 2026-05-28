@@ -38,16 +38,11 @@ pub trait FollowRepository: Send + Sync {
         remote_actor_url: &str,
         status: FollowerStatus,
     ) -> Result<()>;
-    async fn get_pending_followers(
-        &self,
-        local_user_id: uuid::Uuid,
-    ) -> Result<Vec<RemoteActor>>;
+    async fn get_pending_followers(&self, local_user_id: uuid::Uuid) -> Result<Vec<RemoteActor>>;
     /// Return deduplicated inbox URLs (shared_inbox preferred) for accepted
     /// followers, excluding blocked actors/domains. DB-side filtering.
-    async fn get_accepted_follower_inboxes(
-        &self,
-        local_user_id: uuid::Uuid,
-    ) -> Result<Vec<String>>;
+    async fn get_accepted_follower_inboxes(&self, local_user_id: uuid::Uuid)
+    -> Result<Vec<String>>;
 
     // ── Outbound following ──────────────────────────────────────────────────
     async fn add_following(
@@ -61,11 +56,7 @@ pub trait FollowRepository: Send + Sync {
         local_user_id: uuid::Uuid,
         remote_actor_url: &str,
     ) -> Result<Option<String>>;
-    async fn remove_following(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> Result<()>;
+    async fn remove_following(&self, local_user_id: uuid::Uuid, actor_url: &str) -> Result<()>;
     async fn get_following(&self, local_user_id: uuid::Uuid) -> Result<Vec<RemoteActor>>;
     async fn get_following_page(
         &self,

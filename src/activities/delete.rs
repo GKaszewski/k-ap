@@ -1,8 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    kinds::activity::DeleteType,
-    traits::Activity,
+    config::Data, fetch::object_id::ObjectId, kinds::activity::DeleteType, traits::Activity,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -32,8 +29,12 @@ impl Activity for DeleteActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         let actor_domain = self.actor.inner().host_str().unwrap_or("");

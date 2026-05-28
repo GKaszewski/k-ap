@@ -1,8 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    kinds::activity::UndoType,
-    traits::Activity,
+    config::Data, fetch::object_id::ObjectId, kinds::activity::UndoType, traits::Activity,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -28,8 +25,12 @@ impl Activity for UndoActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if let Some(inner_actor) = self.object.get("actor").and_then(|v| v.as_str())
@@ -46,7 +47,11 @@ impl Activity for UndoActivity {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
-        let obj_type = self.object.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let obj_type = self
+            .object
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
         match obj_type {
             "Follow" => {
                 if let Some(obj_url) = self.object.get("object").and_then(|o| o.as_str())

@@ -1,8 +1,5 @@
 use activitypub_federation::{
-    config::Data,
-    fetch::object_id::ObjectId,
-    kinds::activity::AcceptType,
-    traits::Activity,
+    config::Data, fetch::object_id::ObjectId, kinds::activity::AcceptType, traits::Activity,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -30,12 +27,18 @@ impl Activity for AcceptActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if self.actor.inner() != self.object.object.inner() {
-            return Err(Error::bad_request(anyhow::anyhow!("Accept actor does not match Follow target")));
+            return Err(Error::bad_request(anyhow::anyhow!(
+                "Accept actor does not match Follow target"
+            )));
         }
         Ok(())
     }

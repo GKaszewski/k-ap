@@ -15,18 +15,20 @@ pub(crate) mod urls;
 pub mod user;
 pub mod webfinger;
 
-pub use urls::AS_PUBLIC;
 pub use activitypub_federation::kinds::object::NoteType;
 pub use content::{ApContentReader, ApObjectHandler};
 pub use data::{EventPublisher, FederationData, FederationEvent};
 pub use error::Error;
 pub use federation::ApFederationConfig;
 pub use repository::{
-    ActivityRepository, ActorRepository, BlockedDomain, BlocklistRepository,
-    Follower, FollowerStatus, FollowingStatus, FollowRepository, RemoteActor,
+    ActivityRepository, ActorRepository, BlockedDomain, BlocklistRepository, FollowRepository,
+    Follower, FollowerStatus, FollowingStatus, RemoteActor,
 };
 pub use service::ActivityPubService;
-pub use user::{ApActorType, ApProfileField, ApUser, ApUserRepository, ApVisibility, LookedUpActor};
+pub use urls::AS_PUBLIC;
+pub use user::{
+    ApActorType, ApProfileField, ApUser, ApUserRepository, ApVisibility, LookedUpActor,
+};
 
 #[cfg(test)]
 #[path = "tests/integration.rs"]

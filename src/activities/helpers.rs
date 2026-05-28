@@ -64,7 +64,9 @@ pub(crate) async fn extract_and_dispatch_mentions(
         let Some(href) = tag.get("href").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Ok(href_url) = Url::parse(href) else { continue };
+        let Ok(href_url) = Url::parse(href) else {
+            continue;
+        };
         let Some(mentioned_user_id) = crate::urls::extract_user_id_from_url(&href_url) else {
             continue;
         };

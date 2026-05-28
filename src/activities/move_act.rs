@@ -1,9 +1,6 @@
 use activitypub_federation::{
-    activity_sending::SendActivityTask,
-    config::Data,
-    fetch::object_id::ObjectId,
-    protocol::context::WithContext,
-    traits::Activity,
+    activity_sending::SendActivityTask, config::Data, fetch::object_id::ObjectId,
+    protocol::context::WithContext, traits::Activity,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -35,12 +32,18 @@ impl Activity for MoveActivity {
     type DataType = FederationData;
     type Error = Error;
 
-    fn id(&self) -> &Url { &self.id }
-    fn actor(&self) -> &Url { self.actor.inner() }
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        self.actor.inner()
+    }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if &self.object != self.actor.inner() {
-            return Err(Error::bad_request(anyhow::anyhow!("Move object must be the actor itself")));
+            return Err(Error::bad_request(anyhow::anyhow!(
+                "Move object must be the actor itself"
+            )));
         }
         Ok(())
     }
@@ -67,11 +70,17 @@ impl Activity for MoveActivity {
         for local_user_id in &affected {
             let local_actor = match crate::actors::get_local_actor(*local_user_id, data).await {
                 Ok(a) => a,
-                Err(e) => { tracing::warn!(error = %e, %local_user_id, "Move: failed to load local actor"); continue; }
+                Err(e) => {
+                    tracing::warn!(error = %e, %local_user_id, "Move: failed to load local actor");
+                    continue;
+                }
             };
             let follow_id = match crate::urls::activity_url(&data.base_url) {
                 Ok(u) => u,
-                Err(e) => { tracing::warn!(error = %e, "Move: failed to generate follow activity URL"); continue; }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Move: failed to generate follow activity URL");
+                    continue;
+                }
             };
             let follow = FollowActivity {
                 id: follow_id,
@@ -84,9 +93,14 @@ impl Activity for MoveActivity {
                 &local_actor,
                 vec![target.inbox_url.clone()],
                 data,
-            ).await {
+            )
+            .await
+            {
                 Ok(s) => s,
-                Err(e) => { tracing::warn!(error = %e, "Move: failed to prepare re-follow"); continue; }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Move: failed to prepare re-follow");
+                    continue;
+                }
             };
             for send in sends {
                 if let Err(e) = send.sign_and_send(data).await {
