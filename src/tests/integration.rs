@@ -14,7 +14,7 @@ use crate::repository::{
     ActivityRepository, ActorRepository, BlockedDomain, BlocklistRepository, FollowRepository,
     Follower, FollowerStatus, FollowingStatus, RemoteActor,
 };
-use crate::user::{ApActorType, ApProfileField, ApUser, ApUserRepository};
+use crate::user::{ApActorType, ApUser, ApUserRepository};
 
 // ── ActivityRepository ────────────────────────────────────────────────────────
 

@@ -25,8 +25,7 @@ pub enum ApVisibility {
 }
 
 /// Actor type for AP serialization. Defaults to `Person`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum ApActorType {
     #[default]
     Person,
@@ -35,7 +34,6 @@ pub enum ApActorType {
     Organization,
     Group,
 }
-
 
 /// Resolved actor data returned by [`crate::service::ActivityPubService::lookup_actor_by_handle`].
 /// Fetched via a signed HTTP request so strict instances (e.g. Threads) return full data.

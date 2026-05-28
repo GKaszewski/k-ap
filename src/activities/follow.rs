@@ -55,10 +55,10 @@ impl Activity for FollowActivity {
                 .ok()
                 .flatten()
                 .is_some()
-            {
-                tracing::debug!(target = %target_url, "accepting follow for migrated actor URL");
-                return Ok(());
-            }
+        {
+            tracing::debug!(target = %target_url, "accepting follow for migrated actor URL");
+            return Ok(());
+        }
         Err(Error::bad_request(anyhow::anyhow!(
             "follow target is not a local actor"
         )))
@@ -74,10 +74,10 @@ impl Activity for FollowActivity {
                 .blocklist_repo
                 .is_actor_blocked(target_user_id, self.actor.inner().as_str())
                 .await?
-            {
-                tracing::info!(actor = %self.actor.inner(), "ignoring follow from blocked actor");
-                return Ok(());
-            }
+        {
+            tracing::info!(actor = %self.actor.inner(), "ignoring follow from blocked actor");
+            return Ok(());
+        }
         let _follower = self.actor.dereference(data).await?;
         let local_actor = self.object.dereference(data).await?;
         data.follow_repo
