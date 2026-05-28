@@ -214,7 +214,7 @@ impl ActivityPubService {
         let data = self.federation_config.to_request_data();
         let local_actor = get_local_actor(user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let person = local_actor.clone().into_json(&data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        let person_json = serde_json::to_value(WithContext::new_default(person))?;
+        let person_json = serde_json::to_value(WithContext::new(person, crate::urls::actor_ap_context()))?;
         let update_id = Url::parse(&format!("{}/activities/update/{}", self.base_url, uuid::Uuid::new_v4()))?;
         let update = UpdateActivity {
             id: update_id,

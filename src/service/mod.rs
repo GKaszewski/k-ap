@@ -125,7 +125,7 @@ impl ActivityPubService {
         let data = self.federation_config.to_request_data();
         let actor = get_local_actor(uuid, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let person = actor.into_json(&data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(serde_json::to_string(&WithContext::new_default(person))?)
+        Ok(serde_json::to_string(&WithContext::new(person, crate::urls::actor_ap_context()))?)
     }
 
     pub async fn followers_collection_json(&self, user_id: uuid::Uuid, page: Option<u32>) -> anyhow::Result<String> {

@@ -26,3 +26,7 @@ pub use repository::{
 };
 pub use service::ActivityPubService;
 pub use user::{ApActorType, ApProfileField, ApUser, ApUserRepository, LookedUpActor};
+
+#[cfg(test)]
+#[path = "tests/integration.rs"]
+mod integration_tests;

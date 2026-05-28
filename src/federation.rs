@@ -18,6 +18,15 @@ impl UrlVerifier for PermissiveVerifier {
 pub struct ApFederationConfig(pub FederationConfig<FederationData>);
 
 impl ApFederationConfig {
+    /// Create a new federation config.
+    ///
+    /// **HTTP signature / Digest behavior:**
+    /// - Production (`debug = false`): strict normalization + **requires `Digest` header** on every
+    ///   inbound POST. All major AP implementations (Mastodon, Pleroma, Pixelfed) include it.
+    /// - Debug (`debug = true`): relaxes Digest requirement, disables signature verification,
+    ///   and accepts any URL. **Never use in production.**
+    ///
+    /// Outbound signing always uses Mastodon compat mode regardless of this flag.
     pub async fn new(data: FederationData, debug: bool) -> anyhow::Result<Self> {
         let config = if debug {
             FederationConfig::builder()

@@ -6,6 +6,7 @@ use axum::extract::Path;
 use crate::actors::{Person, get_local_actor};
 use crate::data::FederationData;
 use crate::error::Error;
+use crate::urls::actor_ap_context;
 
 /// Serves the AP actor JSON for a local user.
 /// The path parameter is the user's UUID (matching the canonical actor URL).
@@ -19,5 +20,5 @@ pub async fn actor_handler(
     let db_actor = get_local_actor(user_id, &data).await?;
     let person = db_actor.into_json(&data).await?;
 
-    Ok(FederationJson(WithContext::new_default(person)))
+    Ok(FederationJson(WithContext::new(person, actor_ap_context())))
 }
