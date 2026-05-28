@@ -39,6 +39,7 @@ pub struct DbActor {
     pub attachment: Vec<ApProfileField>,
     pub manually_approves_followers: bool,
     pub actor_type: ApActorType,
+    pub featured_url: Option<Url>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,6 +101,8 @@ pub struct Person {
     also_known_as: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     attachment: Vec<ProfileFieldObject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    featured: Option<Url>,
 }
 
 struct ActorUrls {
@@ -189,6 +192,7 @@ pub async fn get_local_actor(
         attachment: user.attachment,
         manually_approves_followers: user.manually_approves_followers,
         actor_type: user.actor_type,
+        featured_url: user.featured_url,
     })
 }
 
@@ -264,6 +268,7 @@ impl Object for DbActor {
             attachment: user.attachment,
             manually_approves_followers: user.manually_approves_followers,
             actor_type: user.actor_type,
+            featured_url: user.featured_url,
         }))
     }
 
@@ -316,6 +321,7 @@ impl Object for DbActor {
             image,
             also_known_as,
             attachment,
+            featured: self.featured_url,
         })
     }
 
@@ -399,6 +405,7 @@ impl Object for DbActor {
                 .collect(),
             manually_approves_followers: json.manually_approves_followers,
             actor_type: json.kind,
+            featured_url: json.featured,
         })
     }
 }

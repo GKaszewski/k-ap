@@ -34,6 +34,7 @@ fn person_serializes_with_enriched_fields() {
         image: None,
         also_known_as: vec![],
         attachment: vec![],
+        featured: Some("https://example.com/users/1/featured".parse().unwrap()),
     };
     let json = serde_json::to_value(&person).unwrap();
     assert_eq!(json["discoverable"], true);

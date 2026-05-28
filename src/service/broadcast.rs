@@ -119,7 +119,7 @@ impl ActivityPubService {
             id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
             kind: Default::default(),
             actor: ObjectId::from(local_actor.ap_id.clone()),
-            object: serde_json::json!(ap_id.to_string()),
+            object: serde_json::json!({"type": "Tombstone", "id": ap_id.to_string()}),
             to: vec![crate::urls::AS_PUBLIC.to_string()],
             cc: vec![local_actor.followers_url.to_string()],
         };

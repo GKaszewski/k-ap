@@ -58,6 +58,9 @@ pub struct ApUser {
     pub manually_approves_followers: bool,
     /// AP actor type serialized in the actor JSON. Defaults to `Person`.
     pub actor_type: ApActorType,
+    /// URL of the `featured` (pinned posts) collection. Set to expose a pinned
+    /// posts collection in the actor JSON, compatible with Mastodon/Pleroma.
+    pub featured_url: Option<Url>,
 }
 
 #[async_trait]

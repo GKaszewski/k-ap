@@ -78,12 +78,27 @@ impl ActivityPubService {
         let data = config.to_request_data();
         let local_actor = get_local_actor(owner_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let inbox = Url::parse(&follower_inbox_url)?;
-        let mut objects = data.object_handler.get_local_objects_for_user(owner_user_id).await?;
-        objects.reverse();
-        let total = objects.len();
-        let (mut success_count, mut failure_count) = (0usize, 0usize);
-        for chunk in objects.chunks(BATCH_SIZE) {
-            for (ap_id, object_json) in chunk {
+
+        // Cursor-based pagination via get_local_objects_page (newest-first).
+        // Avoids loading the entire post history into memory at once.
+        let mut before: Option<chrono::DateTime<chrono::Utc>> = None;
+        let (mut success_count, mut failure_count, mut total) = (0usize, 0usize, 0usize);
+
+        loop {
+            let page = data
+                .object_handler
+                .get_local_objects_page(owner_user_id, before, BATCH_SIZE)
+                .await?;
+
+            if page.is_empty() {
+                break;
+            }
+
+            let is_last_page = page.len() < BATCH_SIZE;
+            // Advance cursor to the oldest timestamp in this page.
+            before = page.last().map(|(_, _, ts)| *ts);
+
+            for (ap_id, object_json, _ts) in &page {
                 let create_id = Url::parse(&format!(
                     "{}/activities/create/{}",
                     base_url,
@@ -94,16 +109,35 @@ impl ActivityPubService {
                     actor: ObjectId::from(local_actor.ap_id.clone()),
                     object: object_json.clone(), to: vec![], cc: vec![], bto: vec![], bcc: vec![],
                 };
-                let sends = SendActivityTask::prepare(&WithContext::new_default(create), &local_actor, vec![inbox.clone()], &data).await?;
+                let sends = SendActivityTask::prepare(
+                    &WithContext::new_default(create),
+                    &local_actor,
+                    vec![inbox.clone()],
+                    &data,
+                ).await?;
+                total += 1;
                 if send_with_retry(sends, &data, max_attempts, initial_delay).await.is_empty() {
                     success_count += 1;
                 } else {
                     failure_count += 1;
                 }
             }
+
+            if is_last_page {
+                break;
+            }
+
             tokio::time::sleep(std::time::Duration::from_millis(super::BATCH_FETCH_SLEEP_MS)).await;
         }
-        tracing::info!(user_id = %owner_user_id, follower = %follower_inbox_url, sent = success_count, failed = failure_count, total = total, "backfill complete");
+
+        tracing::info!(
+            user_id = %owner_user_id,
+            follower = %follower_inbox_url,
+            sent = success_count,
+            failed = failure_count,
+            total = total,
+            "backfill complete"
+        );
         Ok(())
     }
 }
