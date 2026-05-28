@@ -1,10 +1,27 @@
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct ApProfileField {
     pub name: String,
     pub value: String,
+}
+
+/// Actor type for AP serialization. Defaults to `Person`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ApActorType {
+    Person,
+    Service,
+    Application,
+    Organization,
+    Group,
+}
+
+impl Default for ApActorType {
+    fn default() -> Self {
+        Self::Person
+    }
 }
 
 /// Resolved actor data returned by [`crate::service::ActivityPubService::lookup_actor_by_handle`].
@@ -29,12 +46,18 @@ pub struct LookedUpActor {
 pub struct ApUser {
     pub id: uuid::Uuid,
     pub username: String,
+    pub display_name: Option<String>,
     pub bio: Option<String>,
     pub avatar_url: Option<Url>,
     pub banner_url: Option<Url>,
     pub also_known_as: Option<String>,
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
+    /// If true, incoming Follow requests must be manually approved before the
+    /// actor is listed as `manuallyApprovesFollowers=true` in AP JSON.
+    pub manually_approves_followers: bool,
+    /// AP actor type serialized in the actor JSON. Defaults to `Person`.
+    pub actor_type: ApActorType,
 }
 
 #[async_trait]

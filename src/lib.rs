@@ -18,11 +18,11 @@ pub mod webfinger;
 pub use urls::AS_PUBLIC;
 pub use activitypub_federation::kinds::object::NoteType;
 pub use content::ApObjectHandler;
-pub use data::FederationData;
+pub use data::{EventPublisher, FederationData, FederationEvent};
 pub use error::Error;
 pub use federation::ApFederationConfig;
 pub use repository::{
     BlockedDomain, FederationRepository, Follower, FollowerStatus, FollowingStatus, RemoteActor,
 };
 pub use service::ActivityPubService;
-pub use user::{ApProfileField, ApUser, ApUserRepository, LookedUpActor};
+pub use user::{ApActorType, ApProfileField, ApUser, ApUserRepository, LookedUpActor};

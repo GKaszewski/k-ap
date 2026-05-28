@@ -63,6 +63,16 @@ pub trait ApObjectHandler: Send + Sync {
         actor_url: &Url,
     ) -> anyhow::Result<()>;
 
+    /// Called when a remote actor boosts (Announce) a non-local object.
+    /// Use this to surface cross-server boosts in followers' feeds.
+    /// `object_url` is the AP URL of the announced note.
+    /// `actor_url` is the AP URL of the remote actor who sent the Announce.
+    async fn on_announce_of_remote(
+        &self,
+        object_url: &Url,
+        actor_url: &Url,
+    ) -> anyhow::Result<()>;
+
     /// Total number of locally-authored posts across all users.
     async fn count_local_posts(&self) -> anyhow::Result<u64>;
 }

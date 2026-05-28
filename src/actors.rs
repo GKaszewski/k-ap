@@ -8,11 +8,12 @@ use activitypub_federation::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use url::Url;
+use zeroize::Zeroizing;
 
 use crate::data::FederationData;
 use crate::error::Error;
 use crate::repository::RemoteActor;
-use crate::user::ApProfileField;
+use crate::user::{ApActorType, ApProfileField};
 
 #[derive(Debug, Clone)]
 pub struct DbActor {
@@ -20,6 +21,8 @@ pub struct DbActor {
     pub username: String,
     pub display_name: Option<String>,
     pub public_key_pem: String,
+    /// Private key PEM. Only populated for local actors during signing.
+    /// Cleared automatically when `DbActor` is dropped.
     pub private_key_pem: Option<String>,
     pub inbox_url: Url,
     pub shared_inbox_url: Option<Url>,
@@ -34,6 +37,8 @@ pub struct DbActor {
     pub also_known_as: Option<String>,
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
+    pub manually_approves_followers: bool,
+    pub actor_type: ApActorType,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -55,22 +60,6 @@ pub struct ProfileFieldObject {
     pub kind: String,
     pub name: String,
     pub value: String,
-}
-
-/// Accepts any AP actor type on inbound JSON; always serializes as "Person" for local actors.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ApActorType {
-    Person,
-    Service,
-    Application,
-    Organization,
-    Group,
-}
-
-impl Default for ApActorType {
-    fn default() -> Self {
-        Self::Person
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -155,9 +144,17 @@ pub async fn get_local_actor(
         Some(kp) => kp,
         None => {
             let kp = generate_actor_keypair()?;
+            // Zeroize the private key after storing it so the plaintext doesn't
+            // linger in memory beyond this scope.
+            let private_zeroized = Zeroizing::new(kp.private_key.clone());
             data.federation_repo
-                .save_local_actor_keypair(user_id, kp.public_key.clone(), kp.private_key.clone())
+                .save_local_actor_keypair(
+                    user_id,
+                    kp.public_key.clone(),
+                    private_zeroized.clone().to_string(),
+                )
                 .await?;
+            drop(private_zeroized);
             (kp.public_key, kp.private_key)
         }
     };
@@ -174,7 +171,7 @@ pub async fn get_local_actor(
     Ok(DbActor {
         user_id,
         username: user.username,
-        display_name: None,
+        display_name: user.display_name,
         public_key_pem: public_key,
         private_key_pem: Some(private_key),
         inbox_url,
@@ -190,6 +187,8 @@ pub async fn get_local_actor(
         also_known_as: user.also_known_as,
         profile_url: user.profile_url,
         attachment: user.attachment,
+        manually_approves_followers: user.manually_approves_followers,
+        actor_type: user.actor_type,
     })
 }
 
@@ -246,8 +245,8 @@ impl Object for DbActor {
 
         Ok(Some(DbActor {
             user_id,
-            username: user.username,
-            display_name: None,
+            username: user.username.clone(),
+            display_name: user.display_name,
             public_key_pem: public_key,
             private_key_pem: private_key,
             inbox_url,
@@ -263,6 +262,8 @@ impl Object for DbActor {
             also_known_as: user.also_known_as,
             profile_url: user.profile_url,
             attachment: user.attachment,
+            manually_approves_followers: user.manually_approves_followers,
+            actor_type: user.actor_type,
         }))
     }
 
@@ -281,7 +282,6 @@ impl Object for DbActor {
             kind: "Image".to_string(),
             url,
         });
-        let profile_url = self.profile_url;
         let also_known_as: Vec<String> = self.also_known_as.into_iter().collect();
         let attachment: Vec<ProfileFieldObject> = self
             .attachment
@@ -297,7 +297,7 @@ impl Object for DbActor {
             Url::parse(&format!("{}/inbox", data.base_url)).expect("base_url is always valid");
 
         Ok(Person {
-            kind: Default::default(),
+            kind: self.actor_type,
             id: self.ap_id.clone().into(),
             preferred_username: self.username.clone(),
             inbox: self.inbox_url.clone(),
@@ -305,12 +305,12 @@ impl Object for DbActor {
             followers: Some(self.followers_url.clone()),
             following: Some(self.following_url.clone()),
             public_key,
-            name: Some(self.username.clone()),
+            name: self.display_name.or_else(|| Some(self.username.clone())),
             summary: self.bio.clone(),
             icon,
-            url: profile_url,
+            url: self.profile_url,
             discoverable: Some(true),
-            manually_approves_followers: true,
+            manually_approves_followers: self.manually_approves_followers,
             updated: Some(self.last_refreshed_at),
             endpoints: Some(Endpoints { shared_inbox }),
             image,
@@ -397,6 +397,8 @@ impl Object for DbActor {
                     value: f.value.clone(),
                 })
                 .collect(),
+            manually_approves_followers: json.manually_approves_followers,
+            actor_type: json.kind,
         })
     }
 }

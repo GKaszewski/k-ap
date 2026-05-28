@@ -139,4 +139,22 @@ pub trait FederationRepository: Send + Sync {
         old_actor_url: &str,
         new_actor_url: &str,
     ) -> Result<Vec<uuid::Uuid>>;
+
+    /// Return `true` if an activity with `activity_id` has already been processed.
+    /// Implementations should enforce a UNIQUE constraint on the stored activity IDs
+    /// so concurrent duplicate deliveries are safely rejected.
+    async fn is_activity_processed(&self, activity_id: &str) -> Result<bool>;
+
+    /// Record `activity_id` as processed. Called immediately before dispatching
+    /// each inbound activity so that retried deliveries are no-ops.
+    async fn mark_activity_processed(&self, activity_id: &str) -> Result<()>;
+
+    /// Return deduplicated inbox URLs (shared_inbox preferred over personal inbox)
+    /// for all **accepted** followers of `local_user_id`, excluding any actors or
+    /// domains that are blocked. Implementations should perform filtering and
+    /// deduplication in the database rather than in application memory.
+    async fn get_accepted_follower_inboxes(
+        &self,
+        local_user_id: uuid::Uuid,
+    ) -> Result<Vec<String>>;
 }

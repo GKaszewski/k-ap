@@ -10,9 +10,9 @@ fn person_serializes_with_enriched_fields() {
             .into(),
         preferred_username: "alice".to_string(),
         inbox: "https://example.com/users/1/inbox".parse().unwrap(),
-        outbox: "https://example.com/users/1/outbox".parse().unwrap(),
-        followers: "https://example.com/users/1/followers".parse().unwrap(),
-        following: "https://example.com/users/1/following".parse().unwrap(),
+        outbox: Some("https://example.com/users/1/outbox".parse().unwrap()),
+        followers: Some("https://example.com/users/1/followers".parse().unwrap()),
+        following: Some("https://example.com/users/1/following".parse().unwrap()),
         public_key: PublicKey {
             id: "https://example.com/users/1#main-key".to_string(),
             owner: "https://example.com/users/1".parse().unwrap(),

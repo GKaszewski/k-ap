@@ -1,10 +1,12 @@
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use activitypub_federation::{
     activity_sending::SendActivityTask, fetch::object_id::ObjectId, protocol::context::WithContext,
-    traits::Actor,
+    traits::{Activity, Actor},
 };
-use axum::{Router, routing::get, routing::post};
+use axum::{Router, extract::DefaultBodyLimit, routing::get, routing::post};
+use serde::Serialize;
 use url::Url;
 
 use crate::{
@@ -12,10 +14,13 @@ use crate::{
         AcceptActivity, CreateActivity, FollowActivity, RejectActivity, UndoActivity,
         UpdateActivity,
     },
+    actor_handler::actor_handler,
     actors::{DbActor, get_local_actor},
     content::ApObjectHandler,
-    data::FederationData,
+    data::{FederationData, FederationEvent},
+    error::Error,
     federation::ApFederationConfig,
+    followers_handler::{followers_handler, following_handler},
     inbox::inbox_handler,
     nodeinfo::{nodeinfo_handler, nodeinfo_well_known_handler},
     outbox::outbox_handler,
@@ -27,10 +32,14 @@ use crate::{
     webfinger::webfinger_handler,
 };
 
-const DELIVERY_MAX_ATTEMPTS: u32 = 3;
-const DELIVERY_INITIAL_DELAY_SECS: u64 = 1;
-const HTTP_FETCH_TIMEOUT_SECS: u64 = 30;
-const BATCH_FETCH_SLEEP_MS: u64 = 100;
+/// Maximum retries for immediate in-process delivery attempts.
+pub const DELIVERY_MAX_ATTEMPTS: u32 = 3;
+/// Initial backoff before first retry (doubles each attempt).
+pub const DELIVERY_INITIAL_DELAY_SECS: u64 = 1;
+/// HTTP request timeout when fetching remote AP resources.
+pub const HTTP_FETCH_TIMEOUT_SECS: u64 = 30;
+/// Sleep between backfill batches to avoid overwhelming remote servers.
+pub const BATCH_FETCH_SLEEP_MS: u64 = 100;
 
 #[allow(dead_code)]
 fn content_to_html(text: &str) -> String {
@@ -51,35 +60,19 @@ fn content_to_html(text: &str) -> String {
     }
 }
 
-fn collect_inboxes(followers: &[crate::repository::Follower]) -> Vec<Url> {
-    let mut seen = std::collections::HashSet::new();
-    let mut inboxes = Vec::new();
-    for f in followers {
-        let inbox_str = f
-            .actor
-            .shared_inbox_url
-            .as_deref()
-            .unwrap_or(&f.actor.inbox_url);
-        if seen.insert(inbox_str.to_string())
-            && let Ok(url) = Url::parse(inbox_str)
-        {
-            inboxes.push(url);
-        }
-    }
-    inboxes
-}
-
 pub(crate) async fn send_with_retry(
     sends: Vec<SendActivityTask>,
     data: &activitypub_federation::config::Data<FederationData>,
+    max_attempts: u32,
+    initial_delay_secs: u64,
 ) -> Vec<anyhow::Error> {
     let mut failures = vec![];
     for send in sends {
-        let mut delay = std::time::Duration::from_secs(DELIVERY_INITIAL_DELAY_SECS);
-        for attempt in 1..=DELIVERY_MAX_ATTEMPTS {
+        let mut delay = std::time::Duration::from_secs(initial_delay_secs);
+        for attempt in 1..=max_attempts {
             match send.clone().sign_and_send(data).await {
                 Ok(()) => break,
-                Err(e) if attempt < DELIVERY_MAX_ATTEMPTS => {
+                Err(e) if attempt < max_attempts => {
                     tracing::warn!(attempt, error = %e, "delivery failed, retrying");
                     tokio::time::sleep(delay).await;
                     delay *= 2;
@@ -94,10 +87,52 @@ pub(crate) async fn send_with_retry(
     failures
 }
 
+/// Wraps a pre-serialized AP activity JSON for re-signing via `SendActivityTask::prepare`.
+/// Used by `deliver_to_inbox` when a consumer re-presents a persisted queue item.
+#[derive(Debug)]
+struct RawActivity {
+    id: Url,
+    actor_url: Url,
+    value: serde_json::Value,
+}
+
+impl Serialize for RawActivity {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(s)
+    }
+}
+
+#[async_trait::async_trait]
+impl Activity for RawActivity {
+    type DataType = FederationData;
+    type Error = Error;
+
+    fn id(&self) -> &Url {
+        &self.id
+    }
+    fn actor(&self) -> &Url {
+        &self.actor_url
+    }
+    async fn verify(
+        &self,
+        _data: &activitypub_federation::config::Data<Self::DataType>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    async fn receive(
+        self,
+        _data: &activitypub_federation::config::Data<Self::DataType>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct ActivityPubService {
     federation_config: ApFederationConfig,
     base_url: String,
+    delivery_max_attempts: u32,
+    delivery_initial_delay_secs: u64,
 }
 
 pub struct ActivityPubServiceBuilder {
@@ -109,6 +144,8 @@ pub struct ActivityPubServiceBuilder {
     software_name: String,
     debug: bool,
     event_publisher: Option<Arc<dyn crate::data::EventPublisher>>,
+    delivery_max_attempts: u32,
+    delivery_initial_delay_secs: u64,
 }
 
 impl ActivityPubServiceBuilder {
@@ -128,6 +165,16 @@ impl ActivityPubServiceBuilder {
         self.event_publisher = Some(v);
         self
     }
+    /// Max delivery retries per inbox per attempt (default: 3).
+    pub fn delivery_max_attempts(mut self, v: u32) -> Self {
+        self.delivery_max_attempts = v;
+        self
+    }
+    /// Initial retry backoff in seconds, doubles each attempt (default: 1).
+    pub fn delivery_initial_delay_secs(mut self, v: u64) -> Self {
+        self.delivery_initial_delay_secs = v;
+        self
+    }
     pub async fn build(self) -> anyhow::Result<ActivityPubService> {
         let data = FederationData::new(
             self.repo,
@@ -142,6 +189,8 @@ impl ActivityPubServiceBuilder {
         Ok(ActivityPubService {
             federation_config,
             base_url: self.base_url,
+            delivery_max_attempts: self.delivery_max_attempts,
+            delivery_initial_delay_secs: self.delivery_initial_delay_secs,
         })
     }
 }
@@ -162,6 +211,8 @@ impl ActivityPubService {
             software_name: String::new(),
             debug: false,
             event_publisher: None,
+            delivery_max_attempts: DELIVERY_MAX_ATTEMPTS,
+            delivery_initial_delay_secs: DELIVERY_INITIAL_DELAY_SECS,
         }
     }
 
@@ -177,9 +228,114 @@ impl ActivityPubService {
         &self.base_url
     }
 
-    /// Returns `(local_actor, deduplicated_inboxes)` for all accepted followers,
-    /// excluding blocked actors and blocked domains.
-    /// Returns `None` if there are no eligible followers.
+    /// Route outbound deliveries: publish [`FederationEvent::DeliveryRequested`] when an
+    /// [`crate::data::EventPublisher`] is configured, otherwise spawn a fire-and-forget task.
+    ///
+    /// `sends` — pre-prepared `SendActivityTask` objects (used in the spawn path).
+    /// `activity_json` — serialized activity (used in the EventPublisher path).
+    /// `inboxes` — target inbox URLs (used in the EventPublisher path).
+    ///
+    /// Both `sends` and `inboxes` are prepared by the caller from the same activity so there
+    /// is no double-serialisation overhead on either path.
+    async fn dispatch_deliveries(
+        &self,
+        data: &activitypub_federation::config::Data<FederationData>,
+        local_actor: &DbActor,
+        inboxes: Vec<Url>,
+        sends: Vec<SendActivityTask>,
+        activity_json: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        if let Some(publisher) = data.event_publisher.as_ref() {
+            for inbox in inboxes {
+                let event = FederationEvent::DeliveryRequested {
+                    inbox,
+                    activity: activity_json.clone(),
+                    signing_actor_id: local_actor.user_id,
+                };
+                if let Err(e) = publisher.publish(event).await {
+                    tracing::warn!(error = %e, "failed to enqueue DeliveryRequested event");
+                }
+            }
+        } else {
+            let data = data.clone();
+            let max_attempts = self.delivery_max_attempts;
+            let initial_delay = self.delivery_initial_delay_secs;
+            tokio::spawn(async move {
+                let failures =
+                    send_with_retry(sends, &data, max_attempts, initial_delay).await;
+                if !failures.is_empty() {
+                    tracing::warn!(count = failures.len(), "some deliveries failed permanently");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    /// Deliver a single outbound activity to `inbox`. Call this from a job-queue consumer
+    /// that received a [`FederationEvent::DeliveryRequested`] event.
+    ///
+    /// `activity` must be a fully-serialized AP activity (with `@context`). On permanent
+    /// failure a [`FederationEvent::DeliveryFailed`] event is published if an
+    /// [`crate::data::EventPublisher`] is configured.
+    pub async fn deliver_to_inbox(
+        &self,
+        inbox: url::Url,
+        activity: serde_json::Value,
+        signing_actor_id: uuid::Uuid,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        let actor = get_local_actor(signing_actor_id, &data)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let id = activity
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .unwrap_or_else(|| actor.ap_id.clone());
+        let actor_url = activity
+            .get("actor")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .unwrap_or_else(|| actor.ap_id.clone());
+
+        let raw = RawActivity {
+            id,
+            actor_url,
+            value: activity.clone(),
+        };
+        let sends =
+            SendActivityTask::prepare(&raw, &actor, vec![inbox.clone()], &data).await?;
+        let failures = send_with_retry(
+            sends,
+            &data,
+            self.delivery_max_attempts,
+            self.delivery_initial_delay_secs,
+        )
+        .await;
+        if failures.is_empty() {
+            return Ok(());
+        }
+        let error_msg = failures
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        if let Some(publisher) = data.event_publisher.as_ref() {
+            let _ = publisher
+                .publish(FederationEvent::DeliveryFailed {
+                    inbox,
+                    activity,
+                    signing_actor_id,
+                    error: error_msg.clone(),
+                })
+                .await;
+        }
+        Err(anyhow::anyhow!("delivery failed: {}", error_msg))
+    }
+
+    /// Returns `(local_actor, deduplicated_inboxes)` for accepted followers via
+    /// the `get_accepted_follower_inboxes` repo method (DB-side filtering).
     async fn accepted_follower_inboxes(
         &self,
         data: &activitypub_federation::config::Data<FederationData>,
@@ -189,43 +345,52 @@ impl ActivityPubService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let followers = data.federation_repo.get_followers(local_user_id).await?;
-        let blocked = data
+        let inbox_strs = data
             .federation_repo
-            .get_blocked_actors(local_user_id)
-            .await
-            .unwrap_or_default();
-        let blocked_set: std::collections::HashSet<String> = blocked.into_iter().collect();
-        let blocked_domains = data
-            .federation_repo
-            .get_blocked_domains()
-            .await
-            .unwrap_or_default();
-        let blocked_domain_set: std::collections::HashSet<String> =
-            blocked_domains.into_iter().map(|d| d.domain).collect();
+            .get_accepted_follower_inboxes(local_user_id)
+            .await?;
 
-        let accepted: Vec<_> = followers
-            .into_iter()
-            .filter(|f| f.status == FollowerStatus::Accepted)
-            .filter(|f| !blocked_set.contains(&f.actor.url))
-            .filter(|f| {
-                let domain = url::Url::parse(&f.actor.inbox_url)
-                    .ok()
-                    .and_then(|u| u.host_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                !blocked_domain_set.contains(&domain)
-            })
-            .collect();
-
-        if accepted.is_empty() {
+        if inbox_strs.is_empty() {
             return Ok(None);
         }
 
-        Ok(Some((local_actor, collect_inboxes(&accepted))))
+        let inboxes: Vec<Url> = inbox_strs
+            .into_iter()
+            .filter_map(|s| {
+                Url::parse(&s)
+                    .map_err(|e| tracing::warn!(inbox = %s, error = %e, "skipping unparseable inbox URL"))
+                    .ok()
+            })
+            .collect();
+
+        if inboxes.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some((local_actor, inboxes)))
     }
 
-    /// Build an OrderedCollection or OrderedCollectionPage JSON for the local
-    /// user's followers list.  Pass `page = None` for the root collection.
+    /// Helper: serialize `activity` to JSON and prepare `SendActivityTask` objects.
+    /// Returns (activity_json, sends, inboxes_clone) so both dispatch paths have what they need.
+    async fn prepare_broadcast<A>(
+        &self,
+        data: &activitypub_federation::config::Data<FederationData>,
+        local_actor: &DbActor,
+        inboxes: Vec<Url>,
+        activity: A,
+    ) -> anyhow::Result<(serde_json::Value, Vec<SendActivityTask>, Vec<Url>)>
+    where
+        A: Activity + Serialize + Debug + Send + Sync,
+    {
+        let with_ctx = WithContext::new_default(activity);
+        // Borrow for JSON (does not move with_ctx).
+        let activity_json = serde_json::to_value(&with_ctx)?;
+        // Borrow for prepare (does not move with_ctx).
+        let sends =
+            SendActivityTask::prepare(&with_ctx, local_actor, inboxes.clone(), data).await?;
+        Ok((activity_json, sends, inboxes))
+    }
+
     pub async fn followers_collection_json(
         &self,
         user_id: uuid::Uuid,
@@ -254,8 +419,7 @@ impl ActivityPubService {
                 "orderedItems": items,
             });
             if has_next {
-                obj["next"] =
-                    serde_json::json!(format!("{}?page={}", collection_id, p + 1));
+                obj["next"] = serde_json::json!(format!("{}?page={}", collection_id, p + 1));
             }
             obj
         } else {
@@ -270,8 +434,6 @@ impl ActivityPubService {
         Ok(serde_json::to_string(&obj)?)
     }
 
-    /// Build an OrderedCollection or OrderedCollectionPage JSON for the local
-    /// user's following list.  Pass `page = None` for the root collection.
     pub async fn following_collection_json(
         &self,
         user_id: uuid::Uuid,
@@ -300,8 +462,7 @@ impl ActivityPubService {
                 "orderedItems": items,
             });
             if has_next {
-                obj["next"] =
-                    serde_json::json!(format!("{}?page={}", collection_id, p + 1));
+                obj["next"] = serde_json::json!(format!("{}?page={}", collection_id, p + 1));
             }
             obj
         } else {
@@ -330,8 +491,6 @@ impl ActivityPubService {
         Ok(serde_json::to_string(&WithContext::new_default(person))?)
     }
 
-    /// Mark a remote follower as accepted in the DB only — no AP activity is sent.
-    /// The caller is responsible for delivering the Accept activity separately.
     pub async fn mark_follower_accepted(
         &self,
         user_id: uuid::Uuid,
@@ -344,8 +503,6 @@ impl ActivityPubService {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    /// Remove a remote follower from the DB only — no AP activity is sent.
-    /// The caller is responsible for delivering the Reject activity separately.
     pub async fn mark_follower_rejected(
         &self,
         user_id: uuid::Uuid,
@@ -358,16 +515,14 @@ impl ActivityPubService {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    /// Resolve a `@user@domain` handle to actor data using a signed HTTP request.
-    /// Unlike a plain unauthenticated fetch, this works with instances (e.g. Threads)
-    /// that require HTTP signatures before returning full actor JSON.
     pub async fn lookup_actor_by_handle(
         &self,
         handle: &str,
     ) -> anyhow::Result<crate::user::LookedUpActor> {
         tracing::info!(handle, "looking up remote actor");
         let data = self.federation_config.to_request_data();
-        let actor = Self::webfinger_https(handle, &data).await
+        let actor = Self::webfinger_https(handle, &data)
+            .await
             .inspect_err(|e| tracing::warn!(handle, error = %e, "actor lookup failed"))?;
         let domain = actor.ap_id.host_str().unwrap_or("").to_string();
         let handle = format!("{}@{}", actor.username, domain);
@@ -388,9 +543,7 @@ impl ActivityPubService {
         })
     }
 
-    /// Returns the ActivityPub router compatible with any outer state `S`.
-    /// Handlers only use `Data<FederationData>` injected by the middleware layer,
-    /// so the router is independent of the application state type.
+    /// Returns the ActivityPub router. Inbox routes enforce a 1 MB body limit.
     pub fn router<S>(&self) -> Router<S>
     where
         S: Clone + Send + Sync + 'static,
@@ -399,19 +552,26 @@ impl ActivityPubService {
             .route("/.well-known/nodeinfo", get(nodeinfo_well_known_handler))
             .route("/nodeinfo/2.0", get(nodeinfo_handler))
             .route("/.well-known/webfinger", get(webfinger_handler))
-            .route("/inbox", post(inbox_handler))
-            .route("/users/{id}/inbox", post(inbox_handler))
+            .route(
+                "/inbox",
+                post(inbox_handler).layer(DefaultBodyLimit::max(1024 * 1024)),
+            )
+            .route("/users/{id}", get(actor_handler))
+            .route(
+                "/users/{id}/inbox",
+                post(inbox_handler).layer(DefaultBodyLimit::max(1024 * 1024)),
+            )
             .route("/users/{id}/outbox", get(outbox_handler))
+            .route("/users/{id}/followers", get(followers_handler))
+            .route("/users/{id}/following", get(following_handler))
             .layer(self.federation_config.middleware())
     }
 
-    /// Fan out an Announce activity to all accepted followers.
     pub async fn broadcast_announce_to_followers(
         &self,
         local_user_id: uuid::Uuid,
         object_ap_id: url::Url,
     ) -> anyhow::Result<()> {
-        // Deterministic ID so Undo(Announce) can reference this same activity.
         let announce_id = url::Url::parse(&format!(
             "{}/activities/announce/{}",
             self.base_url,
@@ -440,28 +600,17 @@ impl ActivityPubService {
             to: vec![crate::urls::AS_PUBLIC.to_string()],
             cc: vec![local_actor.followers_url.to_string()],
         };
-
-        let sends = activitypub_federation::activity_sending::SendActivityTask::prepare(
-            &activitypub_federation::protocol::context::WithContext::new_default(announce),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(count = failures.len(), "some Announce deliveries failed");
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, announce).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Fan out an Undo(Announce) activity to all accepted followers.
     pub async fn broadcast_undo_announce_to_followers(
         &self,
         local_user_id: uuid::Uuid,
         object_ap_id: url::Url,
     ) -> anyhow::Result<()> {
-        // Reconstruct the same deterministic announce ID used when the boost was sent.
         let announce_id = url::Url::parse(&format!(
             "{}/activities/announce/{}",
             self.base_url,
@@ -495,25 +644,12 @@ impl ActivityPubService {
                 "object": object_ap_id.to_string(),
             }),
         };
-
-        let sends = activitypub_federation::activity_sending::SendActivityTask::prepare(
-            &activitypub_federation::protocol::context::WithContext::new_default(undo),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some Undo(Announce) deliveries failed"
-            );
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, undo).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Send a Like activity to a single inbox.
     pub async fn broadcast_like_to_inbox(
         &self,
         liker_user_id: uuid::Uuid,
@@ -525,7 +661,6 @@ impl ActivityPubService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Deterministic ID so Undo(Like) can reference the same activity.
         let like_id = url::Url::parse(&format!(
             "{}/activities/like/{}",
             self.base_url,
@@ -541,25 +676,13 @@ impl ActivityPubService {
             actor: ObjectId::from(local_actor.ap_id.clone()),
             object: object_ap_id,
         };
-
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(like),
-            &local_actor,
-            vec![author_inbox_url],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some Like deliveries failed permanently"
-            );
-        }
-        Ok(())
+        let (json, sends, inboxes) = self
+            .prepare_broadcast(&data, &local_actor, vec![author_inbox_url], like)
+            .await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Send an Undo(Like) activity to a single inbox.
     pub async fn broadcast_undo_like_to_inbox(
         &self,
         liker_user_id: uuid::Uuid,
@@ -571,7 +694,6 @@ impl ActivityPubService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Reconstruct the same deterministic like ID.
         let like_id = url::Url::parse(&format!(
             "{}/activities/like/{}",
             self.base_url,
@@ -594,27 +716,13 @@ impl ActivityPubService {
                 "object": object_ap_id.to_string(),
             }),
         };
-
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(undo),
-            &local_actor,
-            vec![author_inbox_url],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some Undo(Like) deliveries failed permanently"
-            );
-        }
-        Ok(())
+        let (json, sends, inboxes) = self
+            .prepare_broadcast(&data, &local_actor, vec![author_inbox_url], undo)
+            .await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Resolve a `@user@domain` handle to a `DbActor` over HTTPS directly.
-    /// The library's `webfinger_resolve_actor` tries HTTP first in debug mode, which breaks
-    /// on servers that don't redirect HTTP → HTTPS.
     async fn webfinger_https(
         handle: &str,
         data: &activitypub_federation::config::Data<FederationData>,
@@ -647,7 +755,7 @@ impl ActivityPubService {
             .and_then(|l| l["href"].as_str())
             .ok_or_else(|| anyhow::anyhow!("no self link in WebFinger response"))?
             .to_owned();
-        tracing::debug!(handle, self_href, "webfinger resolved, fetching actor with signature");
+        tracing::debug!(handle, self_href, "webfinger resolved, fetching actor");
         let self_url = url::Url::parse(&self_href)?;
         let actor: DbActor = ObjectId::from(self_url)
             .dereference(data)
@@ -673,28 +781,6 @@ impl ActivityPubService {
 
         let follow_id = activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?;
         let follow_id_str = follow_id.to_string();
-        let follow = FollowActivity {
-            id: follow_id,
-            kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
-            object: ObjectId::from(remote_actor.ap_id.clone()),
-        };
-        let follow_with_ctx = WithContext::new_default(follow);
-
-        let sends = SendActivityTask::prepare(
-            &follow_with_ctx,
-            &local_actor,
-            vec![remote_actor.inbox()],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some activity deliveries failed permanently"
-            );
-        }
 
         let domain = remote_actor.ap_id.host_str().unwrap_or("");
         let full_handle = format!("{}@{}", remote_actor.username, domain);
@@ -702,19 +788,29 @@ impl ActivityPubService {
             url: remote_actor.ap_id.to_string(),
             handle: full_handle,
             inbox_url: remote_actor.inbox_url.to_string(),
-            shared_inbox_url: remote_actor
-                .shared_inbox_url
-                .as_ref()
-                .map(|u| u.to_string()),
+            shared_inbox_url: remote_actor.shared_inbox_url.as_ref().map(|u| u.to_string()),
             display_name: Some(remote_actor.username.clone()),
             avatar_url: remote_actor.avatar_url.as_ref().map(|u| u.to_string()),
             outbox_url: Some(remote_actor.outbox_url.to_string()),
         };
+
+        // Save BEFORE delivering Follow — prevents lost state if process restarts
+        // between delivery and the DB write.
         data.federation_repo
             .add_following(local_user_id, remote, &follow_id_str)
             .await?;
 
-        Ok(())
+        let follow = FollowActivity {
+            id: Url::parse(&follow_id_str)?,
+            kind: Default::default(),
+            actor: ObjectId::from(local_actor.ap_id.clone()),
+            object: ObjectId::from(remote_actor.ap_id.clone()),
+        };
+        let (json, sends, inboxes) = self
+            .prepare_broadcast(&data, &local_actor, vec![remote_actor.inbox()], follow)
+            .await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
     pub async fn unfollow(
@@ -725,9 +821,7 @@ impl ActivityPubService {
         let data = self.federation_config.to_request_data();
 
         if actor_url_str.starts_with(&self.base_url) {
-            return self
-                .unfollow_local(local_user_id, actor_url_str, &data)
-                .await;
+            return self.unfollow_local(local_user_id, actor_url_str, &data).await;
         }
 
         let remote = data
@@ -766,20 +860,10 @@ impl ActivityPubService {
             object: serde_json::to_value(&follow).map_err(|e| anyhow::anyhow!("{e}"))?,
         };
 
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(undo),
-            &local_actor,
-            vec![inbox],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some activity deliveries failed permanently"
-            );
-        }
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, vec![inbox], undo).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await?;
 
         data.federation_repo
             .remove_following(local_user_id, actor_url_str)
@@ -829,24 +913,17 @@ impl ActivityPubService {
             object: follow,
         };
 
+        // Mark accepted BEFORE delivering Accept. Local state is authoritative;
+        // if delivery fails, the consumer's job queue retries it.
         data.federation_repo
             .update_follower_status(local_user_id, remote_actor_url, FollowerStatus::Accepted)
             .await?;
 
         let inbox = Url::parse(&remote_actor.inbox_url)?;
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(accept),
-            &local_actor,
-            vec![inbox.clone()],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                "failed to deliver Accept activity, but follower is marked accepted locally"
-            );
-        }
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, vec![inbox], accept).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await?;
 
         let target_inbox = remote_actor
             .shared_inbox_url
@@ -888,20 +965,10 @@ impl ActivityPubService {
         };
 
         let inbox = Url::parse(&remote_actor.inbox_url)?;
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(reject),
-            &local_actor,
-            vec![inbox],
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some activity deliveries failed permanently"
-            );
-        }
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, vec![inbox], reject).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await?;
 
         data.federation_repo
             .remove_follower(local_user_id, remote_actor_url)
@@ -969,7 +1036,6 @@ impl ActivityPubService {
             .await
     }
 
-    /// Broadcast a Delete activity to all accepted followers for a removed review.
     pub async fn broadcast_delete_to_followers(
         &self,
         local_user_id: uuid::Uuid,
@@ -992,20 +1058,12 @@ impl ActivityPubService {
             to: vec![crate::urls::AS_PUBLIC.to_string()],
             cc: vec![local_actor.followers_url.to_string()],
         };
-        let delete_with_ctx = WithContext::new_default(delete);
-        let sends =
-            SendActivityTask::prepare(&delete_with_ctx, &local_actor, inboxes, &data).await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some delete activity deliveries failed"
-            );
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, delete).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Broadcast an Add(WatchlistObject) activity to all accepted followers.
     pub async fn broadcast_add_to_followers(
         &self,
         local_user_id: uuid::Uuid,
@@ -1027,16 +1085,12 @@ impl ActivityPubService {
             to: vec![crate::urls::AS_PUBLIC.to_string()],
             cc: vec![local_actor.followers_url.to_string()],
         };
-        let add_with_ctx = WithContext::new_default(add);
-        let sends = SendActivityTask::prepare(&add_with_ctx, &local_actor, inboxes, &data).await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(count = failures.len(), "some Add deliveries failed");
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, add).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Broadcast an Undo(Add) activity to all accepted followers.
     pub async fn broadcast_undo_add_to_followers(
         &self,
         local_user_id: uuid::Uuid,
@@ -1061,18 +1115,12 @@ impl ActivityPubService {
                 "object": { "id": watchlist_entry_ap_id.as_str() }
             }),
         };
-        let undo_with_ctx = WithContext::new_default(undo);
-        let sends = SendActivityTask::prepare(&undo_with_ctx, &local_actor, inboxes, &data).await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(count = failures.len(), "some Undo(Add) deliveries failed");
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, undo).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Fan out a Create(Note) activity to all accepted followers.
-    /// `note` is the fully-formed Note JSON (including id, type, content, etc.).
-    /// The activity ID is derived deterministically from the note's `id` field.
     pub async fn broadcast_create_note(
         &self,
         local_user_id: uuid::Uuid,
@@ -1103,22 +1151,12 @@ impl ActivityPubService {
             bto: vec![],
             bcc: vec![],
         };
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(create),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(count = failures.len(), "some Create(Note) deliveries failed");
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, create).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Fan out an Update(Note) activity to all accepted followers.
-    /// `note` is the fully-formed Note JSON.
     pub async fn broadcast_update_note(
         &self,
         local_user_id: uuid::Uuid,
@@ -1131,8 +1169,8 @@ impl ActivityPubService {
             return Ok(());
         };
 
-        let update_id = crate::urls::activity_url(&self.base_url)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let update_id =
+            crate::urls::activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         let update = crate::activities::UpdateActivity {
             id: update_id,
@@ -1142,18 +1180,10 @@ impl ActivityPubService {
             to: vec![crate::urls::AS_PUBLIC.to_string()],
             cc: vec![local_actor.followers_url.to_string()],
         };
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(update),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(count = failures.len(), "some Update(Note) deliveries failed");
-        }
-        Ok(())
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, update).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
     pub async fn broadcast_actor_update(&self, user_id: uuid::Uuid) -> anyhow::Result<()> {
@@ -1169,7 +1199,6 @@ impl ActivityPubService {
             .into_json(&data)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        // Wrap with @context so Mastodon's JSON-LD processor can resolve field names.
         let person_json = serde_json::to_value(WithContext::new_default(person))?;
 
         let update_id = Url::parse(&format!(
@@ -1187,57 +1216,18 @@ impl ActivityPubService {
             cc: vec![local_actor.followers_url.to_string()],
         };
 
-        let followers = data.federation_repo.get_followers(user_id).await?;
-        let accepted: Vec<_> = followers
-            .into_iter()
-            .filter(|f| f.status == FollowerStatus::Accepted)
-            .collect();
-
-        if accepted.is_empty() {
-            tracing::info!(user_id = %user_id, "no accepted followers, skipping actor update broadcast");
+        let Some((_, inboxes)) = self.accepted_follower_inboxes(&data, user_id).await? else {
+            tracing::info!(%user_id, "no accepted followers, skipping actor update broadcast");
             return Ok(());
-        }
+        };
 
-        let inboxes = collect_inboxes(&accepted);
-        tracing::info!(
-            user_id = %user_id,
-            follower_count = accepted.len(),
-            inbox_count = inboxes.len(),
-            inboxes = ?inboxes,
-            "broadcasting actor update"
-        );
-
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(update),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            return Err(anyhow::anyhow!(
-                "actor update delivery failed for {} inbox(es): {}",
-                failures.len(),
-                failures
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
-        tracing::info!(user_id = %user_id, "actor update broadcast complete");
-        Ok(())
+        tracing::info!(%user_id, inbox_count = inboxes.len(), "broadcasting actor update");
+        let (json, sends, inboxes) =
+            self.prepare_broadcast(&data, &local_actor, inboxes, update).await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await
     }
 
-    /// Broadcast a Move activity to all accepted followers, signalling that this
-    /// actor is migrating to `new_actor_url`.
-    ///
-    /// **Pre-condition (caller's responsibility):**
-    /// Before calling this, the application must persist `also_known_as = [new_actor_url]`
-    /// in the local actor's row so the old actor JSON already advertises the new URL
-    /// when remote servers fetch it to verify the cross-reference.
     pub async fn broadcast_move(
         &self,
         user_id: uuid::Uuid,
@@ -1248,21 +1238,10 @@ impl ActivityPubService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let followers = data.federation_repo.get_followers(user_id).await?;
-        let accepted: Vec<_> = followers
-            .into_iter()
-            .filter(|f| f.status == FollowerStatus::Accepted)
-            .collect();
-
-        if accepted.is_empty() {
-            tracing::info!(
-                %user_id,
-                "broadcast_move: no accepted followers, nothing to send"
-            );
+        let Some((_, inboxes)) = self.accepted_follower_inboxes(&data, user_id).await? else {
+            tracing::info!(%user_id, "broadcast_move: no accepted followers, nothing to send");
             return Ok(());
-        }
-
-        let inboxes = collect_inboxes(&accepted);
+        };
 
         let move_id =
             crate::urls::activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1275,26 +1254,16 @@ impl ActivityPubService {
             target: new_actor_url.clone(),
         };
 
-        let sends = SendActivityTask::prepare(
-            &WithContext::new_default(move_activity),
-            &local_actor,
-            inboxes,
-            &data,
-        )
-        .await?;
-
-        let failures = send_with_retry(sends, &data).await;
-        if !failures.is_empty() {
-            tracing::warn!(
-                count = failures.len(),
-                "some Move deliveries failed permanently"
-            );
-        }
+        let (json, sends, inboxes) = self
+            .prepare_broadcast(&data, &local_actor, inboxes, move_activity)
+            .await?;
+        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            .await?;
 
         tracing::info!(
             %user_id,
             target = %new_actor_url,
-            "broadcast_move: delivered to all accepted followers"
+            "broadcast_move: dispatched to all accepted followers"
         );
         Ok(())
     }
@@ -1332,17 +1301,11 @@ impl ActivityPubService {
                 object: Url::parse(actor_url)?,
             };
             let inbox = Url::parse(&remote_actor.inbox_url)?;
-            let sends = SendActivityTask::prepare(
-                &WithContext::new_default(block),
-                &local_actor,
-                vec![inbox],
-                &data,
-            )
-            .await?;
-            let failures = send_with_retry(sends, &data).await;
-            if !failures.is_empty() {
-                tracing::warn!(actor = %actor_url, "failed to deliver Block activity");
-            }
+            let (json, sends, inboxes) = self
+                .prepare_broadcast(&data, &local_actor, vec![inbox], block)
+                .await?;
+            self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+                .await?;
         }
 
         Ok(())
@@ -1576,12 +1539,16 @@ impl ActivityPubService {
     fn spawn_backfill(&self, owner_user_id: uuid::Uuid, follower_inbox_url: String) {
         let config = self.federation_config.clone();
         let base_url = self.base_url.clone();
+        let max_attempts = self.delivery_max_attempts;
+        let initial_delay = self.delivery_initial_delay_secs;
         tokio::spawn(async move {
             if let Err(e) = ActivityPubService::run_backfill(
                 config,
                 base_url,
                 owner_user_id,
                 follower_inbox_url,
+                max_attempts,
+                initial_delay,
             )
             .await
             {
@@ -1595,6 +1562,8 @@ impl ActivityPubService {
         base_url: String,
         owner_user_id: uuid::Uuid,
         follower_inbox_url: String,
+        max_attempts: u32,
+        initial_delay: u64,
     ) -> anyhow::Result<()> {
         const BATCH_SIZE: usize = 20;
 
@@ -1616,7 +1585,6 @@ impl ActivityPubService {
 
         for chunk in objects.chunks(BATCH_SIZE) {
             for (ap_id, object_json) in chunk {
-                // Use a stable Create activity ID derived from the object's ap_id
                 let create_id = Url::parse(&format!(
                     "{}/activities/create/{}",
                     base_url,
@@ -1641,7 +1609,7 @@ impl ActivityPubService {
                     &data,
                 )
                 .await?;
-                let failures = send_with_retry(sends, &data).await;
+                let failures = send_with_retry(sends, &data, max_attempts, initial_delay).await;
                 if failures.is_empty() {
                     success_count += 1;
                 } else {
@@ -1662,6 +1630,7 @@ impl ActivityPubService {
         Ok(())
     }
 }
+
 #[cfg(test)]
 #[path = "tests/service.rs"]
 mod tests;

@@ -82,34 +82,44 @@ impl Activity for FollowActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
-        let domain = self.actor().host_str().unwrap_or("");
-        if data.federation_repo.is_domain_blocked(domain).await? {
-            tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
+        if already_processed(&self.id, data).await {
             return Ok(());
         }
+        let actor_url = self.actor.inner();
+        let domain = actor_url.host_str().unwrap_or("");
+
+        if data.federation_repo.is_domain_blocked(domain).await? {
+            tracing::info!(actor = %actor_url, "ignoring follow from blocked domain");
+            return Ok(());
+        }
+
+        // Check per-actor block BEFORE issuing any outbound HTTP request.
+        // We can derive the target user ID from the follow object URL without dereferencing.
+        if let Some(target_user_id) = crate::urls::extract_user_id_from_url(self.object.inner()) {
+            if data
+                .federation_repo
+                .is_actor_blocked(target_user_id, actor_url.as_str())
+                .await?
+            {
+                tracing::info!(actor = %actor_url, "ignoring follow from blocked actor");
+                return Ok(());
+            }
+        }
+
         let _follower = self.actor.dereference(data).await?;
         let local_actor = self.object.dereference(data).await?;
-
-        if data
-            .federation_repo
-            .is_actor_blocked(local_actor.user_id, self.actor.inner().as_str())
-            .await?
-        {
-            tracing::info!(actor = %self.actor.inner(), "ignoring follow from blocked actor");
-            return Ok(());
-        }
 
         data.federation_repo
             .add_follower(
                 local_actor.user_id,
-                self.actor.inner().as_str(),
+                actor_url.as_str(),
                 FollowerStatus::Pending,
                 self.id.as_str(),
             )
             .await?;
 
         tracing::info!(
-            follower = %self.actor.inner(),
+            follower = %actor_url,
             local_user = %local_actor.user_id,
             "follow request pending approval"
         );
@@ -152,6 +162,9 @@ impl Activity for AcceptActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -207,6 +220,9 @@ impl Activity for RejectActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -260,6 +276,9 @@ impl Activity for UndoActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring Undo from blocked domain");
@@ -375,6 +394,9 @@ impl Activity for CreateActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -389,6 +411,10 @@ impl Activity for CreateActivity {
             .and_then(|s| Url::parse(s).ok())
             .unwrap_or_else(|| self.id.clone());
         let actor_url = self.actor.inner().clone();
+
+        // Extract Mention tags and notify local users.
+        extract_and_dispatch_mentions(&ap_id, &actor_url, &self.object, data).await;
+
         data.object_handler
             .on_create(&ap_id, &actor_url, self.object)
             .await
@@ -451,6 +477,9 @@ impl Activity for DeleteActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -535,6 +564,9 @@ impl Activity for UpdateActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -547,6 +579,10 @@ impl Activity for UpdateActivity {
             .and_then(|s| Url::parse(s).ok())
             .unwrap_or_else(|| self.id.clone());
         let actor_url = self.actor.inner().clone();
+
+        // Re-extract mentions on update so newly-added mentions are notified.
+        extract_and_dispatch_mentions(&ap_id, &actor_url, &self.object, data).await;
+
         data.object_handler
             .on_update(&ap_id, &actor_url, self.object)
             .await
@@ -592,6 +628,9 @@ impl Activity for AnnounceActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -599,10 +638,17 @@ impl Activity for AnnounceActivity {
         }
         let object_domain = self.object.host_str().unwrap_or("");
         if object_domain != data.domain {
+            // Cross-server boost: notify the handler so consumers can surface it.
+            data.object_handler
+                .on_announce_of_remote(&self.object, self.actor.inner())
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "failed to process cross-server announce");
+                });
             tracing::debug!(
                 actor = %self.actor.inner(),
                 object = %self.object,
-                "received Announce of non-local object — skipped (cross-server boost not supported)"
+                "received Announce of non-local object"
             );
             return Ok(());
         }
@@ -656,6 +702,9 @@ impl Activity for LikeActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring Like from blocked domain");
@@ -723,6 +772,9 @@ impl Activity for AddActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring Add from blocked domain");
@@ -774,6 +826,9 @@ impl Activity for BlockActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             tracing::info!(actor = %self.actor(), "ignoring activity from blocked domain");
@@ -833,6 +888,9 @@ impl Activity for MoveActivity {
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
+        if already_processed(&self.id, data).await {
+            return Ok(());
+        }
         let domain = self.actor().host_str().unwrap_or("");
         if data.federation_repo.is_domain_blocked(domain).await? {
             return Ok(());
@@ -919,6 +977,76 @@ impl Activity for MoveActivity {
             "received Move — migrated follower relationships"
         );
         Ok(())
+    }
+}
+
+// --- Idempotency guard ---
+
+/// Returns `true` if the activity was already processed (caller should return `Ok(())`).
+/// Marks the activity as processed before returning `false`.
+/// On any repository error the check is skipped to avoid silently dropping activities.
+async fn already_processed(activity_id: &Url, data: &Data<FederationData>) -> bool {
+    let id = activity_id.as_str();
+    match data.federation_repo.is_activity_processed(id).await {
+        Ok(true) => {
+            tracing::debug!(activity_id = id, "duplicate activity, skipping");
+            return true;
+        }
+        Ok(false) => {
+            if let Err(e) = data.federation_repo.mark_activity_processed(id).await {
+                tracing::warn!(activity_id = id, error = %e, "failed to mark activity processed");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "idempotency check failed, processing anyway");
+        }
+    }
+    false
+}
+
+// --- Mention extraction ---
+
+/// Parse `object["tag"]` for Mention entries and call `on_mention` for each
+/// local user that is tagged. Failures are logged but never propagated — a
+/// broken mention notification must not fail the entire activity.
+async fn extract_and_dispatch_mentions(
+    ap_id: &Url,
+    actor_url: &Url,
+    object: &serde_json::Value,
+    data: &Data<FederationData>,
+) {
+    let tags = match object.get("tag").and_then(|t| t.as_array()) {
+        Some(t) => t,
+        None => return,
+    };
+    for tag in tags {
+        let tag_type = tag.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if tag_type != "Mention" {
+            continue;
+        }
+        let href = match tag.get("href").and_then(|v| v.as_str()) {
+            Some(h) => h,
+            None => continue,
+        };
+        let Ok(href_url) = Url::parse(href) else { continue };
+
+        // Only dispatch for local actors.
+        let Some(mentioned_user_id) = crate::urls::extract_user_id_from_url(&href_url) else {
+            continue;
+        };
+
+        if let Err(e) = data
+            .object_handler
+            .on_mention(ap_id, mentioned_user_id, actor_url)
+            .await
+        {
+            tracing::warn!(
+                ap_id = %ap_id,
+                mentioned_user = %mentioned_user_id,
+                error = %e,
+                "failed to dispatch mention notification"
+            );
+        }
     }
 }
 

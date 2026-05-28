@@ -33,15 +33,18 @@ where
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let status = self.1;
+        // Always log the real error internally; never expose it to the client.
         if status.is_server_error() {
             tracing::error!(error = %self.0, status = status.as_u16(), "federation error");
         } else {
-            tracing::debug!(error = %self.0, status = status.as_u16(), "federation response");
+            tracing::debug!(error = %self.0, status = status.as_u16(), "federation client error");
         }
-        let body = if status.is_server_error() {
-            "internal server error".to_string()
-        } else {
-            self.0.to_string()
+        let body = match status {
+            StatusCode::NOT_FOUND => "not found",
+            StatusCode::BAD_REQUEST => "bad request",
+            StatusCode::UNAUTHORIZED => "unauthorized",
+            StatusCode::FORBIDDEN => "forbidden",
+            _ => "internal server error",
         };
         (status, body).into_response()
     }

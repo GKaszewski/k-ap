@@ -1,6 +1,6 @@
 [package]
 name = "k-ap"
-version = "0.1.10"
+version = "0.2.0"
 edition = "2024"
 description = "Generic ActivityPub protocol layer"
 license = "MIT"
@@ -21,3 +21,4 @@ reqwest           = { version = "0.13", features = ["json"] }
 url               = { version = "2", features = ["serde"] }
 enum_delegate     = "0.2"
 activitypub_federation = "0.7.0-beta.11"
+zeroize             = { version = "1", features = ["derive"] }

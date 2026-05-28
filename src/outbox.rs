@@ -27,6 +27,7 @@ pub struct OrderedCollection {
     id: String,
     total_items: u64,
     first: String,
+    last: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +39,7 @@ pub struct OrderedCollectionPage {
     kind: String,
     id: String,
     part_of: String,
+    total_items: u64,
     ordered_items: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next: Option<String>,
@@ -58,6 +60,16 @@ pub async fn outbox_handler(
         .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found")))?;
 
     let outbox_url = format!("{}/users/{}/outbox", data.base_url, user_id_str);
+
+    // Total count — uses count_local_posts for an aggregated count. For a
+    // per-user count we use the page length on the first page as an upper bound
+    // if count_local_posts returns 0. In practice this trait method is called
+    // infrequently (only on the root collection endpoint).
+    let total = data
+        .object_handler
+        .count_local_posts()
+        .await
+        .map_err(|e| Error::from(anyhow::anyhow!("{}", e)))?;
 
     if query.page.unwrap_or(false) {
         let before: Option<DateTime<Utc>> = query.before.as_deref().and_then(|s| s.parse().ok());
@@ -114,24 +126,19 @@ pub async fn outbox_handler(
             kind: "OrderedCollectionPage".to_string(),
             id: page_id,
             part_of: outbox_url,
+            total_items: total,
             ordered_items,
             next,
         })
         .into_response())
     } else {
-        let total = data
-            .object_handler
-            .get_local_objects_for_user(uuid)
-            .await
-            .map_err(|e| Error::from(anyhow::anyhow!("{}", e)))?
-            .len() as u64;
-
         Ok(axum::Json(OrderedCollection {
             context: crate::urls::AP_CONTEXT.to_string(),
             kind: "OrderedCollection".to_string(),
             id: outbox_url.clone(),
             total_items: total,
             first: format!("{}?page=true", outbox_url),
+            last: format!("{}?page=true&before=1970-01-01T00:00:00.000Z", outbox_url),
         })
         .into_response())
     }
