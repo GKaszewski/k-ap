@@ -330,6 +330,34 @@ impl ActivityPubService {
         Ok(serde_json::to_string(&WithContext::new_default(person))?)
     }
 
+    /// Mark a remote follower as accepted in the DB only — no AP activity is sent.
+    /// The caller is responsible for delivering the Accept activity separately.
+    pub async fn mark_follower_accepted(
+        &self,
+        user_id: uuid::Uuid,
+        actor_url: &str,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        data.federation_repo
+            .update_follower_status(user_id, actor_url, crate::repository::FollowerStatus::Accepted)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    /// Remove a remote follower from the DB only — no AP activity is sent.
+    /// The caller is responsible for delivering the Reject activity separately.
+    pub async fn mark_follower_rejected(
+        &self,
+        user_id: uuid::Uuid,
+        actor_url: &str,
+    ) -> anyhow::Result<()> {
+        let data = self.federation_config.to_request_data();
+        data.federation_repo
+            .remove_follower(user_id, actor_url)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
     /// Resolve a `@user@domain` handle to actor data using a signed HTTP request.
     /// Unlike a plain unauthenticated fetch, this works with instances (e.g. Threads)
     /// that require HTTP signatures before returning full actor JSON.
