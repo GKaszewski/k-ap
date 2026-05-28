@@ -56,6 +56,9 @@ pub struct ApUser {
     /// If true, incoming Follow requests must be manually approved before the
     /// actor is listed as `manuallyApprovesFollowers=true` in AP JSON.
     pub manually_approves_followers: bool,
+    /// Whether this actor should appear in AP directory listings.
+    /// Serialized as `discoverable` in actor JSON. Defaults to `true`.
+    pub discoverable: bool,
     /// AP actor type serialized in the actor JSON. Defaults to `Person`.
     pub actor_type: ApActorType,
     /// URL of the `featured` (pinned posts) collection. Set to expose a pinned

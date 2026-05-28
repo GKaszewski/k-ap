@@ -94,6 +94,7 @@ impl MemUserRepo {
             profile_url: None,
             attachment: vec![],
             manually_approves_followers: true,
+            discoverable: true,
             actor_type: ApActorType::Person,
             featured_url: None,
         });

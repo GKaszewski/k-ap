@@ -38,6 +38,7 @@ pub struct DbActor {
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
     pub manually_approves_followers: bool,
+    pub discoverable: bool,
     pub actor_type: ApActorType,
     pub featured_url: Option<Url>,
 }
@@ -191,6 +192,7 @@ pub async fn get_local_actor(
         profile_url: user.profile_url,
         attachment: user.attachment,
         manually_approves_followers: user.manually_approves_followers,
+        discoverable: user.discoverable,
         actor_type: user.actor_type,
         featured_url: user.featured_url,
     })
@@ -267,6 +269,7 @@ impl Object for DbActor {
             profile_url: user.profile_url,
             attachment: user.attachment,
             manually_approves_followers: user.manually_approves_followers,
+            discoverable: user.discoverable,
             actor_type: user.actor_type,
             featured_url: user.featured_url,
         }))
@@ -314,7 +317,7 @@ impl Object for DbActor {
             summary: self.bio.clone(),
             icon,
             url: self.profile_url,
-            discoverable: Some(true),
+            discoverable: Some(self.discoverable),
             manually_approves_followers: self.manually_approves_followers,
             updated: Some(self.last_refreshed_at),
             endpoints: Some(Endpoints { shared_inbox }),
@@ -404,6 +407,7 @@ impl Object for DbActor {
                 })
                 .collect(),
             manually_approves_followers: json.manually_approves_followers,
+            discoverable: json.discoverable.unwrap_or(false),
             actor_type: json.kind,
             featured_url: json.featured,
         })
