@@ -141,7 +141,7 @@ pub async fn get_local_actor(
         .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found: {}", user_id)))?;
 
     let (public_key, private_key) = match data
-        .federation_repo
+        .actor_repo
         .get_local_actor_keypair(user_id)
         .await?
     {
@@ -151,7 +151,7 @@ pub async fn get_local_actor(
             // Zeroize the private key after storing it so the plaintext doesn't
             // linger in memory beyond this scope.
             let private_zeroized = Zeroizing::new(kp.private_key.clone());
-            data.federation_repo
+            data.actor_repo
                 .save_local_actor_keypair(
                     user_id,
                     kp.public_key.clone(),
@@ -231,7 +231,7 @@ impl Object for DbActor {
         };
 
         let keypair = data
-            .federation_repo
+            .actor_repo
             .get_local_actor_keypair(user_id)
             .await?;
 
@@ -363,7 +363,7 @@ impl Object for DbActor {
             avatar_url: json.icon.as_ref().map(|i| i.url.to_string()),
             outbox_url: json.outbox.as_ref().map(|u| u.to_string()),
         };
-        data.federation_repo.upsert_remote_actor(actor).await?;
+        data.actor_repo.upsert_remote_actor(actor).await?;
 
         let url_str = json.id.inner().to_string();
         let user_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, url_str.as_bytes());

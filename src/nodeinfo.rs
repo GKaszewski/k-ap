@@ -60,7 +60,7 @@ pub async fn nodeinfo_well_known_handler(
 
 pub async fn nodeinfo_handler(data: Data<FederationData>) -> Result<Json<NodeInfo>, Error> {
     let user_count = data.user_repo.count_users().await.unwrap_or(0);
-    let local_posts = data.object_handler.count_local_posts().await.unwrap_or(0);
+    let local_posts = data.content_reader.count_local_posts().await.unwrap_or(0);
 
     Ok(Json(NodeInfo {
         version: "2.0".to_string(),

@@ -46,7 +46,7 @@ impl Activity for AcceptActivity {
         }
         let local_user_id = crate::urls::extract_user_id_from_url(self.object.actor.inner())
             .ok_or_else(|| Error::bad_request(anyhow::anyhow!("invalid actor URL in Follow")))?;
-        data.federation_repo
+        data.follow_repo
             .update_following_status(
                 local_user_id,
                 self.actor.inner().as_str(),

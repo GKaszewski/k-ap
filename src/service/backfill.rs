@@ -86,7 +86,7 @@ impl ActivityPubService {
 
         loop {
             let page = data
-                .object_handler
+                .content_reader
                 .get_local_objects_page(owner_user_id, before, BATCH_SIZE)
                 .await?;
 

@@ -44,7 +44,7 @@ impl Activity for RejectActivity {
             return Ok(());
         }
         if let Some(user_id) = crate::urls::extract_user_id_from_url(self.object.actor.inner()) {
-            data.federation_repo
+            data.follow_repo
                 .remove_following(user_id, self.actor.inner().as_str())
                 .await?;
         }

@@ -45,8 +45,8 @@ impl Activity for BlockActivity {
             return Ok(());
         }
         if let Some(local_user_id) = crate::urls::extract_user_id_from_url(&self.object) {
-            let _ = data.federation_repo.remove_following(local_user_id, self.actor.inner().as_str()).await;
-            let _ = data.federation_repo.remove_follower(local_user_id, self.actor.inner().as_str()).await;
+            let _ = data.follow_repo.remove_following(local_user_id, self.actor.inner().as_str()).await;
+            let _ = data.follow_repo.remove_follower(local_user_id, self.actor.inner().as_str()).await;
         }
         tracing::info!(actor = %self.actor.inner(), "received block — removed following and follower");
         Ok(())

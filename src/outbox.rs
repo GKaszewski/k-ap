@@ -66,7 +66,7 @@ pub async fn outbox_handler(
     // if count_local_posts returns 0. In practice this trait method is called
     // infrequently (only on the root collection endpoint).
     let total = data
-        .object_handler
+        .content_reader
         .count_local_posts()
         .await
         .map_err(|e| Error::from(anyhow::anyhow!("{}", e)))?;
@@ -75,7 +75,7 @@ pub async fn outbox_handler(
         let before: Option<DateTime<Utc>> = query.before.as_deref().and_then(|s| s.parse().ok());
 
         let items = data
-            .object_handler
+            .content_reader
             .get_local_objects_page(uuid, before, AP_PAGE_SIZE)
             .await
             .map_err(|e| Error::from(anyhow::anyhow!("{}", e)))?;

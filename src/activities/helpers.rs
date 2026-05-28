@@ -9,13 +9,13 @@ use crate::error::Error;
 /// On repo error, skips the check rather than silently dropping the activity.
 pub(crate) async fn already_processed(activity_id: &Url, data: &Data<FederationData>) -> bool {
     let id = activity_id.as_str();
-    match data.federation_repo.is_activity_processed(id).await {
+    match data.activity_repo.is_activity_processed(id).await {
         Ok(true) => {
             tracing::debug!(activity_id = id, "duplicate activity, skipping");
             true
         }
         Ok(false) => {
-            if let Err(e) = data.federation_repo.mark_activity_processed(id).await {
+            if let Err(e) = data.activity_repo.mark_activity_processed(id).await {
                 tracing::warn!(activity_id = id, error = %e, "failed to mark activity processed");
             }
             false
@@ -39,7 +39,7 @@ pub(crate) async fn check_guards(
         return Ok(true);
     }
     let domain = actor.host_str().unwrap_or("");
-    if data.federation_repo.is_domain_blocked(domain).await? {
+    if data.blocklist_repo.is_domain_blocked(domain).await? {
         tracing::info!(actor = %actor, "ignoring activity from blocked domain");
         return Ok(true);
     }

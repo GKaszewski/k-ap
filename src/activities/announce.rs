@@ -57,7 +57,7 @@ impl Activity for AnnounceActivity {
             tracing::debug!(actor = %self.actor.inner(), object = %self.object, "received Announce of non-local object");
             return Ok(());
         }
-        data.federation_repo
+        data.actor_repo
             .add_announce(
                 self.id.as_str(),
                 self.object.as_str(),

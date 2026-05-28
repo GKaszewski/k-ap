@@ -59,7 +59,7 @@ impl Activity for MoveActivity {
             )));
         }
         let affected = data
-            .federation_repo
+            .follow_repo
             .migrate_follower_actor(self.object.as_str(), self.target.as_str())
             .await
             .map_err(|e| Error::from(anyhow::anyhow!("{e}")))?;

@@ -33,8 +33,8 @@ async fn collection_handler(
     );
 
     let total = match collection_type {
-        "followers" => data.federation_repo.count_followers(user_id).await,
-        _ => data.federation_repo.count_following(user_id).await,
+        "followers" => data.follow_repo.count_followers(user_id).await,
+        _ => data.follow_repo.count_following(user_id).await,
     }
     .map_err(Error::from)?;
 
@@ -44,7 +44,7 @@ async fn collection_handler(
 
         let items: Vec<String> = match collection_type {
             "followers" => data
-                .federation_repo
+                .follow_repo
                 .get_followers_page(user_id, offset as u32, AP_PAGE_SIZE)
                 .await
                 .map_err(Error::from)?
@@ -52,7 +52,7 @@ async fn collection_handler(
                 .map(|f| f.actor.url)
                 .collect(),
             _ => data
-                .federation_repo
+                .follow_repo
                 .get_following_page(user_id, offset as u32, AP_PAGE_SIZE)
                 .await
                 .map_err(Error::from)?

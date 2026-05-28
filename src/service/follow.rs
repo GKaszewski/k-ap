@@ -33,7 +33,7 @@ impl ActivityPubService {
             outbox_url: Some(remote_actor.outbox_url.to_string()),
         };
         // Save BEFORE delivering — prevents lost state on process restart.
-        data.federation_repo.add_following(local_user_id, remote, &follow_id_str).await?;
+        data.follow_repo.add_following(local_user_id, remote, &follow_id_str).await?;
         let follow = FollowActivity {
             id: Url::parse(&follow_id_str)?,
             kind: Default::default(),
@@ -49,12 +49,12 @@ impl ActivityPubService {
         if actor_url_str.starts_with(&self.base_url) {
             return self.unfollow_local(local_user_id, actor_url_str, &data).await;
         }
-        let remote = data.federation_repo.get_remote_actor(actor_url_str).await?
+        let remote = data.actor_repo.get_remote_actor(actor_url_str).await?
             .ok_or_else(|| anyhow::anyhow!("remote actor not found: {}", actor_url_str))?;
         let local_actor = get_local_actor(local_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         let remote_ap_id = Url::parse(actor_url_str)?;
         let inbox = Url::parse(&remote.inbox_url)?;
-        let follow_id = data.federation_repo.get_follow_activity_id(local_user_id, actor_url_str).await?
+        let follow_id = data.follow_repo.get_follow_activity_id(local_user_id, actor_url_str).await?
             .and_then(|id| Url::parse(&id).ok())
             .unwrap_or_else(|| activity_url(&self.base_url).unwrap_or_else(|_| remote_ap_id.clone()));
         let follow = FollowActivity { id: follow_id, kind: Default::default(), actor: ObjectId::from(local_actor.ap_id.clone()), object: ObjectId::from(remote_ap_id) };
@@ -66,7 +66,7 @@ impl ActivityPubService {
         };
         let (json, sends, inboxes) = self.prepare_broadcast(&data, &local_actor, vec![inbox], undo).await?;
         self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json).await?;
-        data.federation_repo.remove_following(local_user_id, actor_url_str).await?;
+        data.follow_repo.remove_following(local_user_id, actor_url_str).await?;
         data.object_handler.on_actor_removed(&Url::parse(actor_url_str)?).await?;
         Ok(())
     }
@@ -74,13 +74,13 @@ impl ActivityPubService {
     pub async fn accept_follower(&self, local_user_id: uuid::Uuid, remote_actor_url: &str) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
         let local_actor = get_local_actor(local_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        let remote_actor = data.federation_repo.get_remote_actor(remote_actor_url).await?
+        let remote_actor = data.actor_repo.get_remote_actor(remote_actor_url).await?
             .ok_or_else(|| anyhow::anyhow!("remote actor not found"))?;
-        let follow_id_str = data.federation_repo.get_follower_follow_activity_id(local_user_id, remote_actor_url).await?
+        let follow_id_str = data.follow_repo.get_follower_follow_activity_id(local_user_id, remote_actor_url).await?
             .ok_or_else(|| anyhow::anyhow!("follow activity id not found for {}", remote_actor_url))?;
         let follow = FollowActivity { id: Url::parse(&follow_id_str)?, kind: Default::default(), actor: ObjectId::from(Url::parse(remote_actor_url)?), object: ObjectId::from(local_actor.ap_id.clone()) };
         let accept = AcceptActivity { id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?, kind: Default::default(), actor: ObjectId::from(local_actor.ap_id.clone()), object: follow };
-        data.federation_repo.update_follower_status(local_user_id, remote_actor_url, FollowerStatus::Accepted).await?;
+        data.follow_repo.update_follower_status(local_user_id, remote_actor_url, FollowerStatus::Accepted).await?;
         let inbox = Url::parse(&remote_actor.inbox_url)?;
         let (json, sends, inboxes) = self.prepare_broadcast(&data, &local_actor, vec![inbox], accept).await?;
         self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json).await?;
@@ -92,25 +92,25 @@ impl ActivityPubService {
     pub async fn reject_follower(&self, local_user_id: uuid::Uuid, remote_actor_url: &str) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
         let local_actor = get_local_actor(local_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        let remote_actor = data.federation_repo.get_remote_actor(remote_actor_url).await?
+        let remote_actor = data.actor_repo.get_remote_actor(remote_actor_url).await?
             .ok_or_else(|| anyhow::anyhow!("remote actor not found"))?;
         let follow = FollowActivity { id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?, kind: Default::default(), actor: ObjectId::from(Url::parse(remote_actor_url)?), object: ObjectId::from(local_actor.ap_id.clone()) };
         let reject = RejectActivity { id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?, kind: Default::default(), actor: ObjectId::from(local_actor.ap_id.clone()), object: follow };
         let inbox = Url::parse(&remote_actor.inbox_url)?;
         let (json, sends, inboxes) = self.prepare_broadcast(&data, &local_actor, vec![inbox], reject).await?;
         self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json).await?;
-        data.federation_repo.remove_follower(local_user_id, remote_actor_url).await?;
+        data.follow_repo.remove_follower(local_user_id, remote_actor_url).await?;
         Ok(())
     }
 
     pub async fn get_pending_followers(&self, local_user_id: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.get_pending_followers(local_user_id).await
+        data.follow_repo.get_pending_followers(local_user_id).await
     }
 
     pub async fn get_accepted_followers(&self, local_user_id: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
         let data = self.federation_config.to_request_data();
-        Ok(data.federation_repo.get_followers(local_user_id).await?
+        Ok(data.follow_repo.get_followers(local_user_id).await?
             .into_iter()
             .filter(|f| f.status == FollowerStatus::Accepted)
             .map(|f| f.actor)
@@ -119,7 +119,7 @@ impl ActivityPubService {
 
     pub async fn count_accepted_followers(&self, local_user_id: uuid::Uuid) -> anyhow::Result<usize> {
         let data = self.federation_config.to_request_data();
-        Ok(data.federation_repo.get_followers(local_user_id).await?
+        Ok(data.follow_repo.get_followers(local_user_id).await?
             .into_iter()
             .filter(|f| f.status == FollowerStatus::Accepted)
             .count())
@@ -127,26 +127,26 @@ impl ActivityPubService {
 
     pub async fn get_following(&self, local_user_id: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.get_following(local_user_id).await
+        data.follow_repo.get_following(local_user_id).await
     }
 
     pub async fn count_following(&self, local_user_id: uuid::Uuid) -> anyhow::Result<usize> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.count_following(local_user_id).await
+        data.follow_repo.count_following(local_user_id).await
     }
 
     pub async fn remove_follower(&self, local_user_id: uuid::Uuid, actor_url: &str) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.remove_follower(local_user_id, actor_url).await
+        data.follow_repo.remove_follower(local_user_id, actor_url).await
     }
 
     pub async fn block_actor(&self, local_user_id: uuid::Uuid, actor_url: &str) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.add_blocked_actor(local_user_id, actor_url).await?;
-        let _ = data.federation_repo.remove_follower(local_user_id, actor_url).await;
-        let _ = data.federation_repo.remove_following(local_user_id, actor_url).await;
+        data.blocklist_repo.add_blocked_actor(local_user_id, actor_url).await?;
+        let _ = data.follow_repo.remove_follower(local_user_id, actor_url).await;
+        let _ = data.follow_repo.remove_following(local_user_id, actor_url).await;
         let local_actor = get_local_actor(local_user_id, &data).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        if let Ok(Some(remote_actor)) = data.federation_repo.get_remote_actor(actor_url).await {
+        if let Ok(Some(remote_actor)) = data.actor_repo.get_remote_actor(actor_url).await {
             let block = crate::activities::BlockActivity {
                 id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
                 kind: Default::default(),
@@ -162,15 +162,15 @@ impl ActivityPubService {
 
     pub async fn unblock_actor(&self, local_user_id: uuid::Uuid, actor_url: &str) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        data.federation_repo.remove_blocked_actor(local_user_id, actor_url).await
+        data.blocklist_repo.remove_blocked_actor(local_user_id, actor_url).await
     }
 
     pub async fn get_blocked_actors(&self, local_user_id: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
         let data = self.federation_config.to_request_data();
-        let actor_urls = data.federation_repo.get_blocked_actors(local_user_id).await?;
+        let actor_urls = data.blocklist_repo.get_blocked_actors(local_user_id).await?;
         let mut actors = Vec::new();
         for url in actor_urls {
-            let actor = match data.federation_repo.get_remote_actor(&url).await {
+            let actor = match data.actor_repo.get_remote_actor(&url).await {
                 Ok(Some(a)) => a,
                 _ => RemoteActor { url: url.clone(), handle: url.clone(), inbox_url: url.clone(), shared_inbox_url: None, display_name: None, avatar_url: None, outbox_url: None },
             };
@@ -193,7 +193,7 @@ impl ActivityPubService {
         let follower_actor_url = crate::urls::actor_url(&self.base_url, local_user_id).to_string();
         let target_actor_url = crate::urls::actor_url(&self.base_url, target.id);
         let follow_id = activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?.to_string();
-        data.federation_repo.add_follower(target.id, &follower_actor_url, FollowerStatus::Accepted, &follow_id).await?;
+        data.follow_repo.add_follower(target.id, &follower_actor_url, FollowerStatus::Accepted, &follow_id).await?;
         let target_as_remote = RemoteActor {
             url: target_actor_url.to_string(),
             handle: format!("{}@{}", target.username, data.domain),
@@ -203,8 +203,8 @@ impl ActivityPubService {
             avatar_url: None,
             outbox_url: None,
         };
-        data.federation_repo.add_following(local_user_id, target_as_remote, &follow_id).await?;
-        data.federation_repo.update_following_status(local_user_id, target_actor_url.as_ref(), FollowingStatus::Accepted).await?;
+        data.follow_repo.add_following(local_user_id, target_as_remote, &follow_id).await?;
+        data.follow_repo.update_following_status(local_user_id, target_actor_url.as_ref(), FollowingStatus::Accepted).await?;
         tracing::info!(follower = %local_user_id, followee = %target.id, "local follow");
         Ok(())
     }
@@ -219,8 +219,8 @@ impl ActivityPubService {
         let target_user_id = crate::urls::extract_user_id_from_url(&target_url)
             .ok_or_else(|| anyhow::anyhow!("invalid local actor URL: {}", target_actor_url))?;
         let local_actor_url = crate::urls::actor_url(&self.base_url, local_user_id).to_string();
-        data.federation_repo.remove_follower(target_user_id, &local_actor_url).await?;
-        data.federation_repo.remove_following(local_user_id, target_actor_url).await?;
+        data.follow_repo.remove_follower(target_user_id, &local_actor_url).await?;
+        data.follow_repo.remove_following(local_user_id, target_actor_url).await?;
         tracing::info!(follower = %local_user_id, followee = %target_user_id, "local unfollow");
         Ok(())
     }

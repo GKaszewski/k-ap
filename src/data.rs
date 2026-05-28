@@ -1,35 +1,25 @@
 use std::sync::Arc;
 
-use crate::content::ApObjectHandler;
-use crate::repository::FederationRepository;
+use crate::content::{ApContentReader, ApObjectHandler};
+use crate::repository::{ActivityRepository, ActorRepository, BlocklistRepository, FollowRepository};
 use crate::user::ApUserRepository;
 
-/// Typed event emitted by the federation layer. Consumers wire in an
-/// [`EventPublisher`] to receive these and drive side effects (job queues,
-/// webhooks, metrics, etc.).
+/// Typed event emitted by the federation layer.
 ///
-/// # Delivery flow
-///
-/// When an `EventPublisher` is configured, outbound activities are NOT
+/// When an [`EventPublisher`] is configured, outbound activities are NOT
 /// delivered directly — instead a [`FederationEvent::DeliveryRequested`] event
-/// is published for each target inbox. The consumer's job queue should:
+/// is published per inbox. The consumer's job queue should:
 /// 1. Persist the event.
-/// 2. Call [`crate::service::ActivityPubService::deliver_to_inbox`] when
-///    processing the queue item.
+/// 2. Call [`crate::service::ActivityPubService::deliver_to_inbox`] when processing.
 ///
-/// Without a publisher, the library falls back to fire-and-forget
-/// `tokio::spawn` delivery (no persistence across restarts).
+/// Without a publisher, the library falls back to `tokio::spawn` delivery.
 #[derive(Debug, Clone)]
 pub enum FederationEvent {
-    /// An outbound activity must be delivered to `inbox`.
-    /// Call `ActivityPubService::deliver_to_inbox(inbox, activity, signing_actor_id)`.
     DeliveryRequested {
         inbox: url::Url,
         activity: serde_json::Value,
         signing_actor_id: uuid::Uuid,
     },
-    /// Delivery to `inbox` failed permanently after all in-process retries.
-    /// The consumer may schedule additional retries or alert.
     DeliveryFailed {
         inbox: url::Url,
         activity: serde_json::Value,
@@ -38,10 +28,7 @@ pub enum FederationEvent {
     },
 }
 
-/// Receives typed federation events from the library.
-///
-/// Implement this trait to bridge federation events into your application's
-/// job queue, message broker, or metrics system.
+/// Receives typed federation events.
 #[async_trait::async_trait]
 pub trait EventPublisher: Send + Sync {
     async fn publish(&self, event: FederationEvent) -> anyhow::Result<()>;
@@ -49,8 +36,12 @@ pub trait EventPublisher: Send + Sync {
 
 #[derive(Clone)]
 pub struct FederationData {
-    pub(crate) federation_repo: Arc<dyn FederationRepository>,
+    pub(crate) activity_repo: Arc<dyn ActivityRepository>,
+    pub(crate) follow_repo: Arc<dyn FollowRepository>,
+    pub(crate) actor_repo: Arc<dyn ActorRepository>,
+    pub(crate) blocklist_repo: Arc<dyn BlocklistRepository>,
     pub(crate) user_repo: Arc<dyn ApUserRepository>,
+    pub(crate) content_reader: Arc<dyn ApContentReader>,
     pub(crate) object_handler: Arc<dyn ApObjectHandler>,
     pub(crate) base_url: String,
     pub(crate) domain: String,
@@ -60,9 +51,14 @@ pub struct FederationData {
 }
 
 impl FederationData {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        federation_repo: Arc<dyn FederationRepository>,
+        activity_repo: Arc<dyn ActivityRepository>,
+        follow_repo: Arc<dyn FollowRepository>,
+        actor_repo: Arc<dyn ActorRepository>,
+        blocklist_repo: Arc<dyn BlocklistRepository>,
         user_repo: Arc<dyn ApUserRepository>,
+        content_reader: Arc<dyn ApContentReader>,
         object_handler: Arc<dyn ApObjectHandler>,
         base_url: String,
         allow_registration: bool,
@@ -77,8 +73,12 @@ impl FederationData {
             .unwrap_or("")
             .to_string();
         Self {
-            federation_repo,
+            activity_repo,
+            follow_repo,
+            actor_repo,
+            blocklist_repo,
             user_repo,
+            content_reader,
             object_handler,
             base_url,
             domain,

@@ -57,7 +57,7 @@ impl Activity for FollowActivity {
         }
         // Actor block checked BEFORE any outbound HTTP fetch.
         if let Some(target_user_id) = crate::urls::extract_user_id_from_url(self.object.inner()) {
-            if data.federation_repo
+            if data.blocklist_repo
                 .is_actor_blocked(target_user_id, self.actor.inner().as_str())
                 .await?
             {
@@ -67,7 +67,7 @@ impl Activity for FollowActivity {
         }
         let _follower = self.actor.dereference(data).await?;
         let local_actor = self.object.dereference(data).await?;
-        data.federation_repo
+        data.follow_repo
             .add_follower(
                 local_actor.user_id,
                 self.actor.inner().as_str(),
