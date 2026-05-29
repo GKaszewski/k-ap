@@ -191,6 +191,14 @@ impl ActivityPubService {
     }
 
     /// Returns the ActivityPub router. Inbox routes enforce a 1 MB body limit.
+    /// Returns the ActivityPub router. Inbox routes enforce a 1 MB body limit.
+    ///
+    /// Does NOT register `GET /users/{id}`, `GET /users/{id}/followers`,
+    /// `GET /users/{id}/following`, or `GET /users/{id}/featured` — consuming
+    /// applications typically own those paths (often behind content negotiation)
+    /// and should wire the AP response themselves by calling `actor_json`,
+    /// `followers_collection_json`, `following_collection_json`, and
+    /// `get_featured_objects` from their own handlers.
     pub fn router<S>(&self) -> Router<S>
     where
         S: Clone + Send + Sync + 'static,
@@ -203,14 +211,11 @@ impl ActivityPubService {
                 "/inbox",
                 post(inbox_handler).layer(DefaultBodyLimit::max(1024 * 1024)),
             )
-            .route("/users/{id}", get(actor_handler))
             .route(
                 "/users/{id}/inbox",
                 post(inbox_handler).layer(DefaultBodyLimit::max(1024 * 1024)),
             )
             .route("/users/{id}/outbox", get(outbox_handler))
-            .route("/users/{id}/followers", get(followers_handler))
-            .route("/users/{id}/following", get(following_handler))
             .route("/users/{id}/featured", get(featured_handler))
             .layer(self.federation_config.middleware())
     }
