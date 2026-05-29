@@ -348,6 +348,11 @@ impl ActivityPubService {
                     display_name: None,
                     avatar_url: None,
                     outbox_url: None,
+                    bio: None,
+                    banner_url: None,
+                    followers_url: None,
+                    following_url: None,
+                    also_known_as: vec![],
                 },
             };
             actors.push(actor);
