@@ -8,6 +8,22 @@ Not domain-specific — no opinions about what your content type looks like.
 
 ## Add as dependency
 
+Via the private Gitea registry (recommended):
+
+```toml
+[dependencies]
+k-ap = { version = "0.3.0", registry = "gitea" }
+```
+
+Configure the registry in `.cargo/config.toml`:
+
+```toml
+[registries.gitea]
+index = "sparse+https://git.gabrielkaszewski.dev/api/packages/GKaszewski/cargo/"
+```
+
+Or via git if you don't have registry access:
+
 ```toml
 [dependencies]
 k-ap = { git = "https://git.gabrielkaszewski.dev/GKaszewski/k-ap.git", tag = "v0.3.0" }
