@@ -85,27 +85,70 @@ impl ActivityPubService {
         Ok(())
     }
 
-    /// Spawns the backfill task in the background.
+    /// Route backfill through [`EventPublisher`] (if configured) or fall back
+    /// to a fire-and-forget `tokio::spawn`.
+    ///
+    /// When `EventPublisher` is set, a [`FederationEvent::BackfillRequested`]
+    /// event is published so the consumer's job queue can process it — allowing
+    /// backfill to run in a separate worker process rather than in the API server.
+    /// The worker calls [`ActivityPubService::run_backfill_for_follower`] to execute.
+    ///
     /// `pub(crate)` so `service::follow` can call it from `accept_follower`.
     pub(crate) fn spawn_backfill(&self, owner_user_id: uuid::Uuid, follower_inbox_url: String) {
-        let config = self.federation_config.clone();
-        let base_url = self.base_url.clone();
-        let max_attempts = self.delivery_max_attempts;
-        let initial_delay = self.delivery_initial_delay_secs;
-        tokio::spawn(async move {
-            if let Err(e) = ActivityPubService::run_backfill(
-                config,
-                base_url,
+        let data = self.federation_config.to_request_data();
+        if let Some(publisher) = data.event_publisher.as_ref() {
+            let publisher = publisher.clone();
+            let event = crate::data::FederationEvent::BackfillRequested {
                 owner_user_id,
                 follower_inbox_url,
-                max_attempts,
-                initial_delay,
-            )
-            .await
-            {
-                tracing::warn!(error = %e, "backfill: task failed");
-            }
-        });
+            };
+            tokio::spawn(async move {
+                if let Err(e) = publisher.publish(event).await {
+                    tracing::warn!(error = %e, "failed to enqueue BackfillRequested event");
+                }
+            });
+        } else {
+            let config = self.federation_config.clone();
+            let base_url = self.base_url.clone();
+            let max_attempts = self.delivery_max_attempts;
+            let initial_delay = self.delivery_initial_delay_secs;
+            tokio::spawn(async move {
+                if let Err(e) = ActivityPubService::run_backfill(
+                    config,
+                    base_url,
+                    owner_user_id,
+                    follower_inbox_url,
+                    max_attempts,
+                    initial_delay,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "backfill: task failed");
+                }
+            });
+        }
+    }
+
+    /// Execute backfill for a single follower inbox. Call this from a job-queue
+    /// consumer that received a [`FederationEvent::BackfillRequested`] event.
+    ///
+    /// Sends all of `owner_user_id`'s locally-authored content to `follower_inbox_url`,
+    /// oldest-to-newest, with a small sleep between batches to avoid overwhelming
+    /// the remote server.
+    pub async fn run_backfill_for_follower(
+        &self,
+        owner_user_id: uuid::Uuid,
+        follower_inbox_url: String,
+    ) -> anyhow::Result<()> {
+        ActivityPubService::run_backfill(
+            self.federation_config.clone(),
+            self.base_url.clone(),
+            owner_user_id,
+            follower_inbox_url,
+            self.delivery_max_attempts,
+            self.delivery_initial_delay_secs,
+        )
+        .await
     }
 
     async fn run_backfill(

@@ -8,25 +8,38 @@ use crate::user::ApUserRepository;
 
 /// Typed event emitted by the federation layer.
 ///
-/// When an [`EventPublisher`] is configured, outbound activities are NOT
-/// delivered directly — instead a [`FederationEvent::DeliveryRequested`] event
-/// is published per inbox. The consumer's job queue should:
-/// 1. Persist the event.
-/// 2. Call [`crate::service::ActivityPubService::deliver_to_inbox`] when processing.
+/// **Delivery:** When an [`EventPublisher`] is configured, outbound activities
+/// are published as [`FederationEvent::DeliveryRequested`] instead of being sent
+/// directly. Process them by calling
+/// [`crate::service::ActivityPubService::deliver_to_inbox`].
 ///
-/// Without a publisher, the library falls back to `tokio::spawn` delivery.
+/// **Backfill:** When a follower is accepted and an [`EventPublisher`] is
+/// configured, [`FederationEvent::BackfillRequested`] is published instead of
+/// spawning an in-process task. Process it by calling
+/// [`crate::service::ActivityPubService::run_backfill_for_follower`].
+///
+/// Without a publisher, both fall back to `tokio::spawn`.
 #[derive(Debug, Clone)]
 pub enum FederationEvent {
+    /// An outbound activity must be delivered to `inbox`.
+    /// Call `ActivityPubService::deliver_to_inbox(inbox, activity, signing_actor_id)`.
     DeliveryRequested {
         inbox: url::Url,
         activity: serde_json::Value,
         signing_actor_id: uuid::Uuid,
     },
+    /// Delivery to `inbox` failed permanently after all in-process retries.
     DeliveryFailed {
         inbox: url::Url,
         activity: serde_json::Value,
         signing_actor_id: uuid::Uuid,
         error: String,
+    },
+    /// A new follower was accepted and their inbox needs backfilling.
+    /// Call `ActivityPubService::run_backfill_for_follower(owner_user_id, follower_inbox_url)`.
+    BackfillRequested {
+        owner_user_id: uuid::Uuid,
+        follower_inbox_url: String,
     },
 }
 
