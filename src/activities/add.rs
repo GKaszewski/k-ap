@@ -54,7 +54,14 @@ impl Activity for AddActivity {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
-        let ap_id = self.id.clone();
+        // Use the object's own id as the stable AP identifier, falling back to
+        // the activity id only if the object has no id field.
+        let ap_id = self
+            .object
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Url::parse(s).ok())
+            .unwrap_or_else(|| self.id.clone());
         let actor_url = self.actor.inner().clone();
         data.object_handler
             .on_create(&ap_id, &actor_url, self.object)

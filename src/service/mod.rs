@@ -9,6 +9,7 @@ use crate::{
     actors::{DbActor, get_local_actor},
     content::{ApContentReader, ApObjectHandler},
     data::FederationData,
+    featured_handler::featured_handler,
     federation::ApFederationConfig,
     followers_handler::{followers_handler, following_handler},
     inbox::inbox_handler,
@@ -210,6 +211,7 @@ impl ActivityPubService {
             .route("/users/{id}/outbox", get(outbox_handler))
             .route("/users/{id}/followers", get(followers_handler))
             .route("/users/{id}/following", get(following_handler))
+            .route("/users/{id}/featured", get(featured_handler))
             .layer(self.federation_config.middleware())
     }
 

@@ -4,6 +4,7 @@ pub mod actors;
 pub mod content;
 pub mod data;
 pub mod error;
+pub mod featured_handler;
 pub mod federation;
 pub mod followers_handler;
 pub mod inbox;

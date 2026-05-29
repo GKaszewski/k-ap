@@ -97,6 +97,44 @@ impl Activity for UndoActivity {
                 }
                 tracing::info!(actor = %self.actor.inner(), "received Undo(Like)");
             }
+            "Announce" => {
+                // Remove the boost record so announce counts stay accurate.
+                let activity_id = self.object.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let object_url_str = self
+                    .object
+                    .get("object")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if !activity_id.is_empty()
+                    && let Err(e) = data
+                        .actor_repo
+                        .remove_announce(activity_id, self.actor.inner().as_str())
+                        .await
+                {
+                    tracing::warn!(error = %e, activity_id, "failed to remove announce record");
+                }
+
+                if let Ok(obj_url) = Url::parse(object_url_str)
+                    && obj_url.host_str().unwrap_or("") == data.domain
+                {
+                    data.object_handler
+                        .on_announce_removed(&obj_url, self.actor.inner())
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(error = %e, "failed to process Undo(Announce)");
+                        });
+                }
+                tracing::info!(actor = %self.actor.inner(), "received Undo(Announce)");
+            }
+            "Block" => {
+                // Remote actor unblocked a local user. No automatic relationship
+                // restoration — the blocked user would need to re-follow manually.
+                tracing::info!(
+                    actor = %self.actor.inner(),
+                    "received Undo(Block) — no automatic action taken"
+                );
+            }
             other => {
                 tracing::debug!(kind = %other, "ignoring Undo of unknown activity type");
             }

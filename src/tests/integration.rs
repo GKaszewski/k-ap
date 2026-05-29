@@ -182,6 +182,9 @@ impl ActorRepository for MemActorRepo {
     ) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn remove_announce(&self, _: &str, _: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn count_announces(&self, _: &str) -> anyhow::Result<usize> {
         Ok(0)
     }

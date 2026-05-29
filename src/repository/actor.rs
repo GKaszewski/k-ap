@@ -30,5 +30,8 @@ pub trait ActorRepository: Send + Sync {
         actor_url: &str,
         announced_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()>;
+    /// Remove a boost record when a remote actor sends `Undo(Announce)`.
+    /// Implementations should match by `activity_id` and `actor_url`.
+    async fn remove_announce(&self, activity_id: &str, actor_url: &str) -> Result<()>;
     async fn count_announces(&self, object_url: &str) -> Result<usize>;
 }

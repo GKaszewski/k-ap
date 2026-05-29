@@ -25,6 +25,17 @@ pub trait ApContentReader: Send + Sync {
 
     /// Total locally-authored posts across all users. Used by NodeInfo.
     async fn count_local_posts(&self) -> anyhow::Result<u64>;
+
+    /// AP URLs of pinned (featured) objects for this user, in display order.
+    ///
+    /// Served at `GET /users/{id}/featured` as an `OrderedCollection`.
+    /// Mastodon and Pleroma follow this link from the actor's `featured` field.
+    ///
+    /// Defaults to an empty list — override to expose pinned posts.
+    async fn get_featured_objects(&self, user_id: uuid::Uuid) -> anyhow::Result<Vec<url::Url>> {
+        let _ = user_id;
+        Ok(vec![])
+    }
 }
 
 /// Write side — the library calls these when processing inbound AP activities.
@@ -82,6 +93,15 @@ pub trait ApObjectHandler: Send + Sync {
     /// `object_url` is your local object's AP URL. The boost count is tracked
     /// separately in [`crate::repository::ActorRepository::count_announces`].
     async fn on_announce_received(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
+
+    /// A remote actor removed their boost (`Undo(Announce)`) of a locally-authored
+    /// object. Use this to decrement boost counts or update UI.
+    ///
+    /// Has a default no-op implementation — override to handle undone boosts.
+    async fn on_announce_removed(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
+        let _ = (object_url, actor_url);
+        Ok(())
+    }
 
     /// A remote actor boosted an object hosted on a **different server**.
     ///
