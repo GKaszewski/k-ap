@@ -37,9 +37,14 @@ impl ActivityPubService {
                 .shared_inbox_url
                 .as_ref()
                 .map(|u| u.to_string()),
-            display_name: Some(remote_actor.username.clone()),
+            display_name: remote_actor.display_name.clone().or_else(|| Some(remote_actor.username.clone())),
             avatar_url: remote_actor.avatar_url.as_ref().map(|u| u.to_string()),
             outbox_url: Some(remote_actor.outbox_url.to_string()),
+            bio: remote_actor.bio.clone(),
+            banner_url: remote_actor.banner_url.as_ref().map(|u| u.to_string()),
+            followers_url: Some(remote_actor.followers_url.to_string()),
+            following_url: Some(remote_actor.following_url.to_string()),
+            also_known_as: remote_actor.also_known_as.clone(),
         };
         // Save BEFORE delivering — prevents lost state on process restart.
         data.follow_repo
@@ -382,9 +387,14 @@ impl ActivityPubService {
             handle: format!("{}@{}", target.username, data.domain),
             inbox_url: format!("{}/inbox", target_actor_url),
             shared_inbox_url: None,
-            display_name: Some(target.username),
-            avatar_url: None,
-            outbox_url: None,
+            display_name: target.display_name.or(Some(target.username)),
+            avatar_url: target.avatar_url.as_ref().map(|u| u.to_string()),
+            outbox_url: Some(format!("{}/outbox", target_actor_url)),
+            bio: target.bio,
+            banner_url: target.banner_url.as_ref().map(|u| u.to_string()),
+            followers_url: Some(format!("{}/followers", target_actor_url)),
+            following_url: Some(format!("{}/following", target_actor_url)),
+            also_known_as: target.also_known_as,
         };
         data.follow_repo
             .add_following(local_user_id, target_as_remote, &follow_id)

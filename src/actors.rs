@@ -355,6 +355,11 @@ impl Object for DbActor {
             display_name: json.name.clone(),
             avatar_url: json.icon.as_ref().map(|i| i.url.to_string()),
             outbox_url: json.outbox.as_ref().map(|u| u.to_string()),
+            bio: json.summary.clone(),
+            banner_url: json.image.as_ref().map(|i| i.url.to_string()),
+            followers_url: json.followers.as_ref().map(|u| u.to_string()),
+            following_url: json.following.as_ref().map(|u| u.to_string()),
+            also_known_as: json.also_known_as.clone(),
         };
         data.actor_repo.upsert_remote_actor(actor).await?;
 

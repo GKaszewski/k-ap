@@ -1,6 +1,24 @@
 # Changelog
 
-## [0.3.0] — unreleased
+## [0.3.1] — 2026-05-29
+
+### Breaking changes
+
+**`RemoteActor` has five new required fields** — struct literals must include them:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `bio` | `Option<String>` | Actor biography/summary |
+| `banner_url` | `Option<String>` | Banner/header image URL |
+| `followers_url` | `Option<String>` | AP followers collection URL |
+| `following_url` | `Option<String>` | AP following collection URL |
+| `also_known_as` | `Vec<String>` | Account aliases (for Move verification) |
+
+These are populated automatically when k-ap fetches a remote actor (via `from_json`) and when the local `follow()` method constructs a `RemoteActor` from the fetched `DbActor`. Consuming applications only need to add the new fields to their `upsert_remote_actor` / `get_remote_actor` SQL and any custom `RemoteActor` construction sites.
+
+---
+
+## [0.3.0] — 2026-05-28
 
 ### Breaking changes
 
