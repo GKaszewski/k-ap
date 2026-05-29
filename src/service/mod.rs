@@ -23,7 +23,7 @@ use crate::{
 };
 
 mod backfill;
-mod broadcast;
+pub(crate) mod broadcast;
 pub(super) mod delivery;
 mod follow;
 

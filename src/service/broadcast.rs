@@ -419,7 +419,7 @@ impl ActivityPubService {
 
 /// Returns `(to, cc)` addressing for the given visibility.
 /// `Private` is handled before calling this (early return in broadcast methods).
-pub(super) fn visibility_addressing(
+pub(crate) fn visibility_addressing(
     visibility: ApVisibility,
     followers_url: &Url,
 ) -> (Vec<String>, Vec<String>) {

@@ -34,3 +34,11 @@ pub use user::{
 #[cfg(test)]
 #[path = "tests/integration.rs"]
 mod integration_tests;
+
+#[cfg(test)]
+#[path = "tests/activities.rs"]
+mod activity_tests;
+
+#[cfg(test)]
+#[path = "tests/broadcast.rs"]
+mod broadcast_tests;
