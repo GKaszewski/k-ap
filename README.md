@@ -67,18 +67,36 @@ let router = Router::new().merge(service.router());
 
 ## What the service handles for you
 
+`service.router()` registers only the routes k-ap fully owns:
+
 | Route | Description |
 |-------|-------------|
-| `GET /users/{id}` | AP actor JSON with public key and security `@context` |
-| `POST /users/{id}/inbox` | Per-user inbox — verifies HTTP signatures, 1 MB limit |
-| `POST /inbox` | Shared inbox — same verification |
+| `POST /inbox` | Shared inbox — HTTP signature verification + dispatch, 1 MB limit |
+| `POST /users/{id}/inbox` | Per-user inbox — same |
 | `GET /users/{id}/outbox` | Cursor-based `OrderedCollection` |
-| `GET /users/{id}/followers` | Offset-paginated follower collection |
-| `GET /users/{id}/following` | Offset-paginated following collection |
-| `GET /users/{id}/featured` | Pinned posts `OrderedCollection` (from `get_featured_objects`) |
+| `GET /users/{id}/featured` | Pinned posts `OrderedCollection` |
 | `GET /.well-known/webfinger` | JRD with `aliases` field |
 | `GET /.well-known/nodeinfo` | NodeInfo well-known redirect |
 | `GET /nodeinfo/2.0` | NodeInfo 2.0 |
+
+**Not registered by `router()`:** `GET /users/{id}`, `GET /users/{id}/followers`, `GET /users/{id}/following`.
+
+These paths are dual-purpose in real applications — they must serve both AP JSON (`application/activity+json`) and the app's own UI JSON (content negotiation). k-ap can't do the UI half, so your application owns the route and calls k-ap's helper methods to produce the AP response:
+
+```rust
+// In your axum actor handler — serve AP JSON or UI JSON based on Accept header
+async fn actor_handler(Path(username): Path<String>, headers: HeaderMap, ...) {
+    if wants_ap_json(&headers) {
+        let json = service.actor_json(&user.id.to_string()).await?;
+        return ap_json_response(json);
+    }
+    // ... serve UI response
+}
+
+// Similarly for followers/following:
+let json = service.followers_collection_json(user_id, page).await?;
+let json = service.following_collection_json(user_id, page).await?;
+```
 
 ## ApUser fields
 

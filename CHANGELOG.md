@@ -86,6 +86,8 @@ service.broadcast_create_note(user_id, note_json, ApVisibility::Public, mentione
 
 **`GET /users/{id}/featured` route** — serves an `OrderedCollection` of pinned posts via `ApContentReader::get_featured_objects`. Default is an empty collection.
 
+**`router()` no longer registers `GET /users/{id}`, `/followers`, or `/following`** — these paths need content negotiation (AP JSON vs UI JSON) which k-ap can't do. Your application owns those routes and calls `actor_json`, `followers_collection_json`, `following_collection_json` to produce the AP response. See README for the pattern.
+
 **`FederationEvent::BackfillRequested`** — when an `EventPublisher` is configured, `accept_follower` publishes this event instead of spawning an in-process task. Process it by calling `run_backfill_for_follower`.
 
 **`run_backfill_for_follower(owner_user_id, follower_inbox_url)`** — public method for workers processing `BackfillRequested` events.

@@ -5,13 +5,11 @@ use axum::{Router, extract::DefaultBodyLimit, routing::get, routing::post};
 use url::Url;
 
 use crate::{
-    actor_handler::actor_handler,
     actors::{DbActor, get_local_actor},
     content::{ApContentReader, ApObjectHandler},
     data::FederationData,
     featured_handler::featured_handler,
     federation::ApFederationConfig,
-    followers_handler::{followers_handler, following_handler},
     inbox::inbox_handler,
     nodeinfo::{nodeinfo_handler, nodeinfo_well_known_handler},
     outbox::outbox_handler,
@@ -190,15 +188,19 @@ impl ActivityPubService {
         &self.base_url
     }
 
-    /// Returns the ActivityPub router. Inbox routes enforce a 1 MB body limit.
-    /// Returns the ActivityPub router. Inbox routes enforce a 1 MB body limit.
+    /// Returns the ActivityPub router.
     ///
-    /// Does NOT register `GET /users/{id}`, `GET /users/{id}/followers`,
-    /// `GET /users/{id}/following`, or `GET /users/{id}/featured` — consuming
-    /// applications typically own those paths (often behind content negotiation)
-    /// and should wire the AP response themselves by calling `actor_json`,
-    /// `followers_collection_json`, `following_collection_json`, and
-    /// `get_featured_objects` from their own handlers.
+    /// Registers only routes that k-ap fully owns:
+    /// - `POST /inbox` + `POST /users/{id}/inbox` — signature verification + dispatch (1 MB limit)
+    /// - `GET /users/{id}/outbox` — cursor-paginated OrderedCollection
+    /// - `GET /users/{id}/featured` — pinned posts OrderedCollection
+    /// - `GET /.well-known/webfinger`, `GET /.well-known/nodeinfo`, `GET /nodeinfo/2.0`
+    ///
+    /// **Not registered:** `GET /users/{id}`, `GET /users/{id}/followers`,
+    /// `GET /users/{id}/following`. Real applications need those paths to serve
+    /// both AP JSON and their own UI JSON (content negotiation), so they must own
+    /// the route. Call `actor_json`, `followers_collection_json`, and
+    /// `following_collection_json` from your own handler to produce the AP response.
     pub fn router<S>(&self) -> Router<S>
     where
         S: Clone + Send + Sync + 'static,
