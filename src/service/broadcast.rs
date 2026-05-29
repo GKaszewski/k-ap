@@ -226,21 +226,53 @@ impl ActivityPubService {
             .await
     }
 
+    /// Fan out a Create(Note) activity to accepted followers and any explicitly
+    /// mentioned actors.
+    ///
+    /// `visibility` controls `to`/`cc` addressing and whether the note is public:
+    /// - `Public` / `FollowersOnly`: delivered to followers + `mentioned_inboxes`
+    /// - `Private`: returns immediately — no delivery to anyone
+    ///
+    /// `mentioned_inboxes` should contain the inbox URLs of remote actors
+    /// explicitly tagged in the note who are not already followers. Resolve them
+    /// via [`ActivityPubService::lookup_actor_by_handle`] before calling. Pass an
+    /// empty `Vec` if there are no external mentions.
     pub async fn broadcast_create_note(
         &self,
         local_user_id: uuid::Uuid,
         note: serde_json::Value,
         visibility: ApVisibility,
+        mentioned_inboxes: Vec<Url>,
     ) -> anyhow::Result<()> {
         if visibility == ApVisibility::Private {
             return Ok(());
         }
         let data = self.federation_config.to_request_data();
-        let Some((local_actor, inboxes)) =
-            self.accepted_follower_inboxes(&data, local_user_id).await?
-        else {
+        let local_actor = crate::actors::get_local_actor(local_user_id, &data)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Merge follower inboxes with explicitly mentioned actor inboxes,
+        // deduplicating by string to avoid delivering the same inbox twice.
+        let follower_inboxes = data
+            .follow_repo
+            .get_accepted_follower_inboxes(local_user_id)
+            .await?;
+        let mut seen = std::collections::HashSet::new();
+        let mut inboxes: Vec<Url> = follower_inboxes
+            .into_iter()
+            .filter_map(|s| Url::parse(&s).ok())
+            .filter(|u| seen.insert(u.to_string()))
+            .collect();
+        for inbox in mentioned_inboxes {
+            if seen.insert(inbox.to_string()) {
+                inboxes.push(inbox);
+            }
+        }
+        if inboxes.is_empty() {
             return Ok(());
-        };
+        }
+
         let note_id_str = note["id"].as_str().unwrap_or("");
         let create_id = Url::parse(&format!(
             "{}/activities/create/{}",
@@ -266,21 +298,42 @@ impl ActivityPubService {
             .await
     }
 
+    /// Fan out an Update(Note) activity to accepted followers and mentioned actors.
+    /// See [`broadcast_create_note`] for `mentioned_inboxes` semantics.
     pub async fn broadcast_update_note(
         &self,
         local_user_id: uuid::Uuid,
         note: serde_json::Value,
         visibility: ApVisibility,
+        mentioned_inboxes: Vec<Url>,
     ) -> anyhow::Result<()> {
         if visibility == ApVisibility::Private {
             return Ok(());
         }
         let data = self.federation_config.to_request_data();
-        let Some((local_actor, inboxes)) =
-            self.accepted_follower_inboxes(&data, local_user_id).await?
-        else {
+        let local_actor = crate::actors::get_local_actor(local_user_id, &data)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let follower_inboxes = data
+            .follow_repo
+            .get_accepted_follower_inboxes(local_user_id)
+            .await?;
+        let mut seen = std::collections::HashSet::new();
+        let mut inboxes: Vec<Url> = follower_inboxes
+            .into_iter()
+            .filter_map(|s| Url::parse(&s).ok())
+            .filter(|u| seen.insert(u.to_string()))
+            .collect();
+        for inbox in mentioned_inboxes {
+            if seen.insert(inbox.to_string()) {
+                inboxes.push(inbox);
+            }
+        }
+        if inboxes.is_empty() {
             return Ok(());
-        };
+        }
+
         let (to, cc) = visibility_addressing(visibility, &local_actor.followers_url);
         let update = crate::activities::UpdateActivity {
             id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,

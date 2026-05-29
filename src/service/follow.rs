@@ -209,6 +209,21 @@ impl ActivityPubService {
         data.follow_repo.get_pending_followers(local_user_id).await
     }
 
+    /// Returns one page of accepted followers. Prefer this over `get_accepted_followers`
+    /// for large accounts — the DB does the filtering rather than loading everything.
+    pub async fn get_accepted_followers_page(
+        &self,
+        local_user_id: uuid::Uuid,
+        offset: u32,
+        limit: usize,
+    ) -> anyhow::Result<Vec<RemoteActor>> {
+        let data = self.federation_config.to_request_data();
+        data.follow_repo
+            .get_accepted_followers_page(local_user_id, offset, limit)
+            .await
+    }
+
+    /// Returns ALL accepted followers. For large accounts use `get_accepted_followers_page`.
     pub async fn get_accepted_followers(
         &self,
         local_user_id: uuid::Uuid,
@@ -224,18 +239,15 @@ impl ActivityPubService {
             .collect())
     }
 
+    /// Count of accepted followers — DB-side query, no in-memory filtering.
     pub async fn count_accepted_followers(
         &self,
         local_user_id: uuid::Uuid,
     ) -> anyhow::Result<usize> {
         let data = self.federation_config.to_request_data();
-        Ok(data
-            .follow_repo
-            .get_followers(local_user_id)
-            .await?
-            .into_iter()
-            .filter(|f| f.status == FollowerStatus::Accepted)
-            .count())
+        data.follow_repo
+            .count_accepted_followers(local_user_id)
+            .await
     }
 
     pub async fn get_following(

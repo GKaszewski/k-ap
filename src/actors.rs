@@ -34,7 +34,7 @@ pub struct DbActor {
     pub bio: Option<String>,
     pub avatar_url: Option<Url>,
     pub banner_url: Option<Url>,
-    pub also_known_as: Option<String>,
+    pub also_known_as: Vec<String>,
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
     pub manually_approves_followers: bool,
@@ -283,7 +283,7 @@ impl Object for DbActor {
             kind: "Image".to_string(),
             url,
         });
-        let also_known_as: Vec<String> = self.also_known_as.into_iter().collect();
+        let also_known_as = self.also_known_as;
         let attachment: Vec<ProfileFieldObject> = self
             .attachment
             .into_iter()
@@ -395,7 +395,7 @@ impl Object for DbActor {
             bio: json.summary.clone(),
             avatar_url: json.icon.as_ref().map(|i| i.url.clone()),
             banner_url: json.image.as_ref().map(|i| i.url.clone()),
-            also_known_as: json.also_known_as.into_iter().next(),
+            also_known_as: json.also_known_as,
             profile_url: json.url.clone(),
             attachment: json
                 .attachment

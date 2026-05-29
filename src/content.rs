@@ -3,18 +3,19 @@ use chrono::{DateTime, Utc};
 use url::Url;
 
 /// Read side — the library queries this when sending content outward.
-/// Implement on the same struct as [`ApObjectHandler`] if you prefer
-/// a single database type.
+/// Implement on the same struct as [`ApObjectHandler`] if you prefer a single
+/// database type.
 #[async_trait]
 pub trait ApContentReader: Send + Sync {
-    /// All locally-authored objects for this user. Used by backfill on accept_follower.
-    async fn get_local_objects_for_user(
-        &self,
-        user_id: uuid::Uuid,
-    ) -> anyhow::Result<Vec<(Url, serde_json::Value)>>;
-
-    /// Newest-first page of locally-authored objects, published before `before`.
-    /// Returns `(ap_id, object_json, published_at)`. Used by the outbox endpoint.
+    /// Newest-first page of locally-authored objects for `user_id`, published
+    /// strictly before `before` (pass `None` for the first page).
+    /// Returns `(ap_id, object_json, published_at)` tuples.
+    ///
+    /// Used by the outbox endpoint and by backfill when a new follower is
+    /// accepted. Implementations MUST:
+    /// - Return objects in descending `published_at` order.
+    /// - Exclude deleted and draft content.
+    /// - Be consistent across pages (no duplicates, no gaps).
     async fn get_local_objects_page(
         &self,
         user_id: uuid::Uuid,
@@ -27,8 +28,22 @@ pub trait ApContentReader: Send + Sync {
 }
 
 /// Write side — the library calls these when processing inbound AP activities.
+///
+/// All methods are called after HTTP signature verification has passed.
+/// Returning `Err` propagates a 500 back to the remote server, which will
+/// trigger a retry from well-behaved implementations. Return `Ok(())` to
+/// silently accept an activity you don't want to act on.
+///
+/// **Idempotency:** Methods may be called more than once for the same activity
+/// (e.g. under a race during duplicate delivery). Implementations should be
+/// idempotent — prefer upsert over insert.
 #[async_trait]
 pub trait ApObjectHandler: Send + Sync {
+    /// A remote actor published new content.
+    ///
+    /// `ap_id` is the stable URL of the object (e.g. the Note URL, not the
+    /// Create activity URL). Store or index the `object` JSON as appropriate
+    /// for your domain.
     async fn on_create(
         &self,
         ap_id: &Url,
@@ -36,6 +51,10 @@ pub trait ApObjectHandler: Send + Sync {
         object: serde_json::Value,
     ) -> anyhow::Result<()>;
 
+    /// A remote actor edited existing content.
+    ///
+    /// `ap_id` matches a previously received `on_create` call. Update the
+    /// stored object.
     async fn on_update(
         &self,
         ap_id: &Url,
@@ -43,18 +62,42 @@ pub trait ApObjectHandler: Send + Sync {
         object: serde_json::Value,
     ) -> anyhow::Result<()>;
 
+    /// A remote actor deleted an object previously delivered via `on_create`.
     async fn on_delete(&self, ap_id: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A remote actor was deleted or has unfollowed all local users.
+    ///
+    /// Remove all content and state associated with `actor_url` from local
+    /// storage. Called for `Delete(actor)` and for `Undo(Follow)`.
     async fn on_actor_removed(&self, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A remote actor liked a locally-authored object.
     async fn on_like(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A remote actor removed their like from a locally-authored object.
     async fn on_unlike(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A remote actor boosted (Announced) a **locally-authored** object.
+    ///
+    /// `object_url` is your local object's AP URL. The boost count is tracked
+    /// separately in [`crate::repository::ActorRepository::count_announces`].
     async fn on_announce_received(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A remote actor boosted an object hosted on a **different server**.
+    ///
+    /// Use this to surface cross-server boosts in local feeds. Called instead
+    /// of `on_announce_received` when the announced object URL is external.
+    /// Failures are logged and swallowed — they do not fail the activity.
     async fn on_announce_of_remote(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
+    /// A local user was tagged (Mentioned) in an inbound Create or Update.
+    ///
+    /// Called for every `{"type":"Mention","href":"<local-actor-url>"}` tag
+    /// found in inbound activities. Use this to send in-app notifications.
+    /// The note content is also delivered independently via `on_create`.
+    ///
+    /// Failures are logged and swallowed — a broken notification must not
+    /// cause the activity to be rejected.
     async fn on_mention(
         &self,
         thought_ap_id: &Url,

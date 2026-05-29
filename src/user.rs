@@ -48,7 +48,7 @@ pub struct LookedUpActor {
     pub outbox_url: Option<Url>,
     pub followers_url: Option<Url>,
     pub following_url: Option<Url>,
-    pub also_known_as: Option<String>,
+    pub also_known_as: Vec<String>,
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
 }
@@ -61,7 +61,7 @@ pub struct ApUser {
     pub bio: Option<String>,
     pub avatar_url: Option<Url>,
     pub banner_url: Option<Url>,
-    pub also_known_as: Option<String>,
+    pub also_known_as: Vec<String>,
     pub profile_url: Option<Url>,
     pub attachment: Vec<ApProfileField>,
     /// If true, incoming Follow requests must be manually approved before the

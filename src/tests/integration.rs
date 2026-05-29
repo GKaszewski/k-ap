@@ -88,6 +88,17 @@ impl FollowRepository for MemFollowRepo {
     async fn get_accepted_follower_inboxes(&self, _: uuid::Uuid) -> anyhow::Result<Vec<String>> {
         Ok(vec![])
     }
+    async fn count_accepted_followers(&self, _: uuid::Uuid) -> anyhow::Result<usize> {
+        Ok(0)
+    }
+    async fn get_accepted_followers_page(
+        &self,
+        _: uuid::Uuid,
+        _: u32,
+        _: usize,
+    ) -> anyhow::Result<Vec<RemoteActor>> {
+        Ok(vec![])
+    }
     async fn add_following(&self, _: uuid::Uuid, _: RemoteActor, _: &str) -> anyhow::Result<()> {
         Ok(())
     }
@@ -246,7 +257,7 @@ impl MemUserRepo {
                 bio: None,
                 avatar_url: None,
                 banner_url: None,
-                also_known_as: None,
+                also_known_as: vec![],
                 profile_url: None,
                 attachment: vec![],
                 manually_approves_followers: true,
@@ -283,12 +294,6 @@ struct MemContentReader;
 
 #[async_trait]
 impl ApContentReader for MemContentReader {
-    async fn get_local_objects_for_user(
-        &self,
-        _: uuid::Uuid,
-    ) -> anyhow::Result<Vec<(Url, serde_json::Value)>> {
-        Ok(vec![])
-    }
     async fn get_local_objects_page(
         &self,
         _: uuid::Uuid,

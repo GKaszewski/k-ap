@@ -43,6 +43,16 @@ pub trait FollowRepository: Send + Sync {
     /// followers, excluding blocked actors/domains. DB-side filtering.
     async fn get_accepted_follower_inboxes(&self, local_user_id: uuid::Uuid)
     -> Result<Vec<String>>;
+    /// Count of accepted followers only. More efficient than loading all followers
+    /// and filtering in application memory.
+    async fn count_accepted_followers(&self, local_user_id: uuid::Uuid) -> Result<usize>;
+    /// Accepted followers page for display purposes. `offset` is 0-based.
+    async fn get_accepted_followers_page(
+        &self,
+        local_user_id: uuid::Uuid,
+        offset: u32,
+        limit: usize,
+    ) -> Result<Vec<RemoteActor>>;
 
     // ── Outbound following ──────────────────────────────────────────────────
     async fn add_following(

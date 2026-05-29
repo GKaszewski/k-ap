@@ -8,7 +8,19 @@ use crate::{activities::CreateActivity, actors::get_local_actor, federation::ApF
 use super::{ActivityPubService, delivery::send_with_retry};
 
 impl ActivityPubService {
-    pub async fn backfill_outbox(&self, outbox_url: &str, actor_url: &str) -> anyhow::Result<()> {
+    /// Fetch a remote actor's outbox and import its content into the local instance.
+    ///
+    /// This is for importing a **remote actor's history** — for example, when you want
+    /// to surface an account's past posts after a local user follows them. It fetches
+    /// pages from `outbox_url` and calls `ApObjectHandler::on_create` for each item.
+    ///
+    /// This is distinct from [`ActivityPubService::run_backfill_for_follower`], which
+    /// sends **your** local content to a new follower's inbox.
+    pub async fn import_remote_outbox(
+        &self,
+        outbox_url: &str,
+        actor_url: &str,
+    ) -> anyhow::Result<()> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
                 super::HTTP_FETCH_TIMEOUT_SECS,
