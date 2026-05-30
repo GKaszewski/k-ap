@@ -133,21 +133,36 @@ pub async fn get_local_actor(
     user_id: uuid::Uuid,
     data: &Data<FederationData>,
 ) -> Result<DbActor, Error> {
-    let user = data
-        .user_repo
-        .find_by_id(user_id)
-        .await
-        .map_err(Error::from)?
-        .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found: {}", user_id)))?;
+    build_local_actor(
+        user_id,
+        &data.base_url,
+        data.user_repo.as_ref(),
+        data.actor_repo.as_ref(),
+    )
+    .await
+    .map_err(|e| Error::not_found(anyhow::anyhow!("{e}")))
+}
 
-    let (public_key, private_key) = match data.actor_repo.get_local_actor_keypair(user_id).await? {
+/// Build a local actor's `DbActor` from repository data. Generates a keypair
+/// if one doesn't exist yet. Usable outside of a `FederationData` context
+/// (e.g. during service construction).
+pub async fn build_local_actor(
+    user_id: uuid::Uuid,
+    base_url: &str,
+    user_repo: &dyn crate::user::ApUserRepository,
+    actor_repo: &dyn crate::repository::ActorRepository,
+) -> anyhow::Result<DbActor> {
+    let user = user_repo
+        .find_by_id(user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("user not found: {}", user_id))?;
+
+    let (public_key, private_key) = match actor_repo.get_local_actor_keypair(user_id).await? {
         Some(kp) => kp,
         None => {
             let kp = generate_actor_keypair()?;
-            // Zeroize the private key after storing it so the plaintext doesn't
-            // linger in memory beyond this scope.
             let private_zeroized = Zeroizing::new(kp.private_key.clone());
-            data.actor_repo
+            actor_repo
                 .save_local_actor_keypair(
                     user_id,
                     kp.public_key.clone(),
@@ -166,7 +181,7 @@ pub async fn get_local_actor(
         outbox_url,
         followers_url,
         following_url,
-    } = ActorUrls::build(&data.base_url, user_id);
+    } = ActorUrls::build(base_url, user_id);
 
     Ok(DbActor {
         user_id,

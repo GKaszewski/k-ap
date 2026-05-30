@@ -23,6 +23,7 @@ use crate::{
 mod backfill;
 pub(crate) mod broadcast;
 pub(super) mod delivery;
+mod fetch;
 mod follow;
 
 /// Default max delivery retries per inbox (used as the builder default).
@@ -57,6 +58,7 @@ pub struct ActivityPubServiceBuilder {
     event_publisher: Option<Arc<dyn crate::data::EventPublisher>>,
     delivery_max_attempts: u32,
     delivery_initial_delay_secs: u64,
+    signed_fetch_actor_id: Option<uuid::Uuid>,
 }
 
 impl ActivityPubServiceBuilder {
@@ -113,6 +115,14 @@ impl ActivityPubServiceBuilder {
         self
     }
 
+    /// Set a local actor whose keypair signs all outgoing fetch requests
+    /// (HTTP Signature on GETs). Required for federating with instances
+    /// that enforce authorized-fetch / Secure Mode.
+    pub fn signed_fetch_actor_id(mut self, v: uuid::Uuid) -> Self {
+        self.signed_fetch_actor_id = Some(v);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<ActivityPubService> {
         let activity_repo = self
             .activity_repo
@@ -138,9 +148,9 @@ impl ActivityPubServiceBuilder {
         let data = FederationData::new(
             activity_repo,
             follow_repo,
-            actor_repo,
+            actor_repo.clone(),
             blocklist_repo,
-            user_repo,
+            user_repo.clone(),
             content_reader,
             object_handler,
             self.base_url.clone(),
@@ -148,7 +158,20 @@ impl ActivityPubServiceBuilder {
             self.software_name,
             self.event_publisher,
         );
-        let federation_config = ApFederationConfig::new(data, self.debug).await?;
+        let signing_actor = if let Some(uid) = self.signed_fetch_actor_id {
+            let actor = crate::actors::build_local_actor(
+                uid,
+                &self.base_url,
+                user_repo.as_ref(),
+                actor_repo.as_ref(),
+            )
+            .await?;
+            Some(actor)
+        } else {
+            None
+        };
+        let federation_config =
+            ApFederationConfig::new(data, self.debug, signing_actor.as_ref()).await?;
         Ok(ActivityPubService {
             federation_config,
             base_url: self.base_url,
@@ -175,6 +198,7 @@ impl ActivityPubService {
             event_publisher: None,
             delivery_max_attempts: DELIVERY_MAX_ATTEMPTS,
             delivery_initial_delay_secs: DELIVERY_INITIAL_DELAY_SECS,
+            signed_fetch_actor_id: None,
         }
     }
 

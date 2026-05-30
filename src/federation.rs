@@ -2,6 +2,7 @@ use activitypub_federation::config::{Data, FederationConfig, FederationMiddlewar
 use activitypub_federation::error::Error as FedError;
 use url::Url;
 
+use crate::actors::DbActor;
 use crate::data::FederationData;
 
 #[derive(Clone)]
@@ -27,7 +28,15 @@ impl ApFederationConfig {
     ///   and accepts any URL. **Never use in production.**
     ///
     /// Outbound signing always uses Mastodon compat mode regardless of this flag.
-    pub async fn new(data: FederationData, debug: bool) -> anyhow::Result<Self> {
+    ///
+    /// When `signing_actor` is provided, all outgoing fetch requests (GETs) are
+    /// signed with that actor's keypair — required for instances with
+    /// authorized-fetch / Secure Mode enabled.
+    pub async fn new(
+        data: FederationData,
+        debug: bool,
+        signing_actor: Option<&DbActor>,
+    ) -> anyhow::Result<Self> {
         let config = if debug {
             FederationConfig::builder()
                 .domain(&data.domain)
@@ -38,12 +47,12 @@ impl ApFederationConfig {
                 .build()
                 .await?
         } else {
-            FederationConfig::builder()
-                .domain(&data.domain)
-                .app_data(data)
-                .debug(false)
-                .build()
-                .await?
+            let mut builder = FederationConfig::builder();
+            builder.domain(&data.domain).app_data(data).debug(false);
+            if let Some(actor) = signing_actor {
+                builder.signed_fetch_actor(actor);
+            }
+            builder.build().await?
         };
         Ok(Self(config))
     }
