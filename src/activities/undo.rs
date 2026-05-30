@@ -128,11 +128,18 @@ impl Activity for UndoActivity {
                 tracing::info!(actor = %self.actor.inner(), "received Undo(Announce)");
             }
             "Block" => {
-                // Remote actor unblocked a local user. No automatic relationship
-                // restoration — the blocked user would need to re-follow manually.
+                if let Some(obj_url) = self.object.get("object").and_then(|o| o.as_str())
+                    && let Ok(url) = Url::parse(obj_url)
+                    && let Some(user_id) = crate::urls::extract_user_id_from_url(&url)
+                {
+                    let _ = data
+                        .blocklist_repo
+                        .remove_blocked_actor(user_id, self.actor.inner().as_str())
+                        .await;
+                }
                 tracing::info!(
                     actor = %self.actor.inner(),
-                    "received Undo(Block) — no automatic action taken"
+                    "received Undo(Block) — removed from blocklist"
                 );
             }
             other => {

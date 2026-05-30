@@ -46,17 +46,22 @@ impl Activity for BlockActivity {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
+        let actor_url = self.actor.inner().as_str();
         if let Some(local_user_id) = crate::urls::extract_user_id_from_url(&self.object) {
             let _ = data
                 .follow_repo
-                .remove_following(local_user_id, self.actor.inner().as_str())
+                .remove_following(local_user_id, actor_url)
                 .await;
             let _ = data
                 .follow_repo
-                .remove_follower(local_user_id, self.actor.inner().as_str())
+                .remove_follower(local_user_id, actor_url)
+                .await;
+            let _ = data
+                .blocklist_repo
+                .add_blocked_actor(local_user_id, actor_url)
                 .await;
         }
-        tracing::info!(actor = %self.actor.inner(), "received block — removed following and follower");
+        tracing::info!(actor = %actor_url, "received block — removed relationships, recorded in blocklist");
         Ok(())
     }
 }
