@@ -374,6 +374,7 @@ fn make_data(
         false,
         "test".to_string(),
         None,
+        std::time::Duration::from_secs(24 * 60 * 60),
     )
 }
 

@@ -34,6 +34,8 @@ pub const DELIVERY_INITIAL_DELAY_SECS: u64 = 1;
 pub const HTTP_FETCH_TIMEOUT_SECS: u64 = 30;
 /// Sleep between backfill send batches.
 pub const BATCH_FETCH_SLEEP_MS: u64 = 100;
+/// Default actor cache TTL in seconds (24 hours).
+pub const ACTOR_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Clone)]
 pub struct ActivityPubService {
@@ -59,6 +61,7 @@ pub struct ActivityPubServiceBuilder {
     delivery_max_attempts: u32,
     delivery_initial_delay_secs: u64,
     signed_fetch_actor_id: Option<uuid::Uuid>,
+    actor_cache_ttl_secs: u64,
 }
 
 impl ActivityPubServiceBuilder {
@@ -115,6 +118,13 @@ impl ActivityPubServiceBuilder {
         self
     }
 
+    /// How long cached remote actors are considered fresh (seconds, default 24h).
+    /// After this duration, the next access re-fetches the actor from origin.
+    pub fn actor_cache_ttl_secs(mut self, v: u64) -> Self {
+        self.actor_cache_ttl_secs = v;
+        self
+    }
+
     /// Set a local actor whose keypair signs all outgoing fetch requests
     /// (HTTP Signature on GETs). Required for federating with instances
     /// that enforce authorized-fetch / Secure Mode.
@@ -157,6 +167,7 @@ impl ActivityPubServiceBuilder {
             self.allow_registration,
             self.software_name,
             self.event_publisher,
+            std::time::Duration::from_secs(self.actor_cache_ttl_secs),
         );
         let signing_actor = if let Some(uid) = self.signed_fetch_actor_id {
             let actor = crate::actors::build_local_actor(
@@ -199,6 +210,7 @@ impl ActivityPubService {
             delivery_max_attempts: DELIVERY_MAX_ATTEMPTS,
             delivery_initial_delay_secs: DELIVERY_INITIAL_DELAY_SECS,
             signed_fetch_actor_id: None,
+            actor_cache_ttl_secs: ACTOR_CACHE_TTL_SECS,
         }
     }
 

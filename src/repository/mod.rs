@@ -8,6 +8,8 @@ pub use actor::ActorRepository;
 pub use blocklist::BlocklistRepository;
 pub use follow::FollowRepository;
 
+use chrono::{DateTime, Utc};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FollowerStatus {
     Pending,
@@ -35,6 +37,10 @@ pub struct RemoteActor {
     pub followers_url: Option<String>,
     pub following_url: Option<String>,
     pub also_known_as: Vec<String>,
+    /// When this actor was last fetched from the origin instance.
+    /// `None` means unknown — treated as always-fresh to avoid
+    /// breaking existing consumers that don't populate this field.
+    pub fetched_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]

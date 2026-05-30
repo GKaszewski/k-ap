@@ -375,6 +375,7 @@ impl Object for DbActor {
             followers_url: json.followers.as_ref().map(|u| u.to_string()),
             following_url: json.following.as_ref().map(|u| u.to_string()),
             also_known_as: json.also_known_as.clone(),
+            fetched_at: Some(Utc::now()),
         };
         data.actor_repo.upsert_remote_actor(actor).await?;
 

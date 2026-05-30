@@ -63,6 +63,7 @@ pub struct FederationData {
     pub(crate) allow_registration: bool,
     pub(crate) software_name: String,
     pub(crate) event_publisher: Option<Arc<dyn EventPublisher>>,
+    pub(crate) actor_cache_ttl: std::time::Duration,
 }
 
 impl FederationData {
@@ -79,6 +80,7 @@ impl FederationData {
         allow_registration: bool,
         software_name: String,
         event_publisher: Option<Arc<dyn EventPublisher>>,
+        actor_cache_ttl: std::time::Duration,
     ) -> Self {
         let domain = base_url
             .trim_start_matches("https://")
@@ -100,6 +102,7 @@ impl FederationData {
             allow_registration,
             software_name,
             event_publisher,
+            actor_cache_ttl,
         }
     }
 }

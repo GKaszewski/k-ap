@@ -48,6 +48,7 @@ impl ActivityPubService {
             followers_url: Some(remote_actor.followers_url.to_string()),
             following_url: Some(remote_actor.following_url.to_string()),
             also_known_as: remote_actor.also_known_as.clone(),
+            fetched_at: Some(chrono::Utc::now()),
         };
         // Save BEFORE delivering — prevents lost state on process restart.
         data.follow_repo
@@ -356,6 +357,7 @@ impl ActivityPubService {
                     followers_url: None,
                     following_url: None,
                     also_known_as: vec![],
+                    fetched_at: None,
                 },
             };
             actors.push(actor);
@@ -403,6 +405,7 @@ impl ActivityPubService {
             followers_url: Some(format!("{}/followers", target_actor_url)),
             following_url: Some(format!("{}/following", target_actor_url)),
             also_known_as: target.also_known_as,
+            fetched_at: None,
         };
         data.follow_repo
             .add_following(local_user_id, target_as_remote, &follow_id)

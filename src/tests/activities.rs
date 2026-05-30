@@ -520,6 +520,7 @@ async fn setup(blocklist: MemBlocklistRepo, local_user_id: uuid::Uuid) -> TestSe
         false,
         "test".to_string(),
         None,
+        std::time::Duration::from_secs(24 * 60 * 60),
     );
 
     let config = FederationConfig::builder()
