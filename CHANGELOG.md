@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.0] — 2026-05-30
+
+### Breaking changes
+
+**`RemoteActor` has a new required field `fetched_at: Option<DateTime<Utc>>`** — set to `Some(Utc::now())` when fetched from a remote instance, or `None` for locally-constructed actors. Consumers must add this column to their `upsert_remote_actor` / `get_remote_actor` implementations.
+
+**`ApFederationConfig::new()` signature changed** — now takes an additional `signing_actor: Option<&DbActor>` parameter. Internal to consumers using `ApFederationConfig` directly; builder users are unaffected.
+
+**`FederationData::new()` takes an additional `actor_cache_ttl: Duration` parameter** — only affects consumers constructing `FederationData` directly (e.g. tests).
+
+---
+
+### New features
+
+**Signed fetch for authorized-fetch / Secure Mode** — set `.signed_fetch_actor_id(uuid)` on the builder to sign all outgoing GET requests with that actor's keypair. Call `service.signed_fetch(&url)` to fetch any remote AP resource with signatures.
+
+**Actor cache TTL** — `fetched_at` is now tracked on `RemoteActor`. Configure staleness via `.actor_cache_ttl_secs(secs)` (default: 24h). Use `get_or_refresh_remote_actor(actor_url)` for TTL-aware lookups that re-fetch stale actors from origin.
+
+**SSRF protection** — all outgoing HTTP requests (federation fetches, WebFinger, backfill) now validate resolved IPs against private/reserved ranges (127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, CGNAT 100.64/10, ::1, fc00::/7, fe80::/10). Debug mode bypasses this check.
+
+---
+
+### Bug fixes
+
+**Inbound `Block` now persists to `BlocklistRepository`** — `BlockActivity::receive()` calls `add_blocked_actor()` after removing follower/following relationships. `Undo(Block)` clears the record via `remove_blocked_actor()`.
+
+---
+
 ## [0.3.1] — 2026-05-29
 
 ### Breaking changes
