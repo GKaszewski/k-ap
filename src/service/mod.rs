@@ -450,6 +450,8 @@ impl ActivityPubService {
             domain_str, user, domain_str
         );
         tracing::debug!(handle, wf_url, "resolving webfinger");
+        let wf_parsed = Url::parse(&wf_url)?;
+        crate::security::validate_url(&wf_parsed).await?;
         let wf: serde_json::Value = reqwest::Client::new()
             .get(&wf_url)
             .header("Accept", "application/jrd+json, application/json")

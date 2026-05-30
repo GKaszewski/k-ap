@@ -21,6 +21,8 @@ impl ActivityPubService {
         outbox_url: &str,
         actor_url: &str,
     ) -> anyhow::Result<()> {
+        let outbox_parsed = url::Url::parse(outbox_url)?;
+        crate::security::validate_url(&outbox_parsed).await?;
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
                 super::HTTP_FETCH_TIMEOUT_SECS,
@@ -47,6 +49,12 @@ impl ActivityPubService {
         loop {
             if !visited.insert(current_url.clone()) {
                 tracing::warn!(url = %current_url, "backfill: loop detected, stopping");
+                break;
+            }
+            if let Ok(page_url) = url::Url::parse(&current_url)
+                && let Err(e) = crate::security::validate_url(&page_url).await
+            {
+                tracing::warn!(url = %current_url, error = %e, "backfill: SSRF check failed");
                 break;
             }
             let page: serde_json::Value = match client

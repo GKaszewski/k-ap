@@ -11,6 +11,7 @@ pub mod inbox;
 pub mod nodeinfo;
 pub mod outbox;
 pub mod repository;
+pub(crate) mod security;
 pub mod service;
 pub(crate) mod urls;
 pub mod user;

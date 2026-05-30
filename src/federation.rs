@@ -48,7 +48,11 @@ impl ApFederationConfig {
                 .await?
         } else {
             let mut builder = FederationConfig::builder();
-            builder.domain(&data.domain).app_data(data).debug(false);
+            builder
+                .domain(&data.domain)
+                .url_verifier(Box::new(crate::security::SsrfVerifier))
+                .app_data(data)
+                .debug(false);
             if let Some(actor) = signing_actor {
                 builder.signed_fetch_actor(actor);
             }
