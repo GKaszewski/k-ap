@@ -37,7 +37,10 @@ impl ActivityPubService {
                 .shared_inbox_url
                 .as_ref()
                 .map(|u| u.to_string()),
-            display_name: remote_actor.display_name.clone().or_else(|| Some(remote_actor.username.clone())),
+            display_name: remote_actor
+                .display_name
+                .clone()
+                .or_else(|| Some(remote_actor.username.clone())),
             avatar_url: remote_actor.avatar_url.as_ref().map(|u| u.to_string()),
             outbox_url: Some(remote_actor.outbox_url.to_string()),
             bio: remote_actor.bio.clone(),
