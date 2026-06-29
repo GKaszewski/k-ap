@@ -328,7 +328,32 @@ impl ActivityPubService {
         let data = self.federation_config.to_request_data();
         data.blocklist_repo
             .remove_blocked_actor(local_user_id, actor_url)
+            .await?;
+        let local_actor = get_local_actor(local_user_id, &data)
             .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Ok(Some(remote_actor)) = data.actor_repo.get_remote_actor(actor_url).await {
+            let block = crate::activities::BlockActivity {
+                id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+                kind: Default::default(),
+                actor: ObjectId::from(local_actor.ap_id.clone()),
+                object: Url::parse(actor_url)?,
+            };
+            let undo = UndoActivity {
+                id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+                kind: Default::default(),
+                actor: ObjectId::from(local_actor.ap_id.clone()),
+                object: serde_json::to_value(&block).map_err(|e| anyhow::anyhow!("{e}"))?,
+            };
+            let inbox = Url::parse(&remote_actor.inbox_url)?;
+            let (json, sends, inboxes) = self
+                .prepare_broadcast(&data, &local_actor, vec![inbox], undo)
+                .await?;
+            self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+                .await?;
+            tracing::info!(actor = %actor_url, "sent Undo(Block)");
+        }
+        Ok(())
     }
 
     pub async fn get_blocked_actors(
