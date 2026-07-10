@@ -51,11 +51,7 @@ impl Activity for AcceptActivity {
             .ok_or_else(|| Error::bad_request(anyhow::anyhow!("invalid actor URL in Follow")))?;
         let remote_actor_url = self.actor.inner().as_str().to_string();
         data.follow_repo
-            .update_following_status(
-                local_user_id,
-                &remote_actor_url,
-                FollowingStatus::Accepted,
-            )
+            .update_following_status(local_user_id, &remote_actor_url, FollowingStatus::Accepted)
             .await?;
         tracing::info!(remote_actor = %remote_actor_url, "follow accepted by remote");
 

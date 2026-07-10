@@ -119,11 +119,11 @@ impl ActorUrls {
     fn build(base_url: &str, user_id: uuid::Uuid) -> Self {
         let ap_id = crate::urls::actor_url(base_url, user_id);
         Self {
-            inbox_url: Url::parse(&format!("{}/inbox", &ap_id)).expect("valid url"),
+            inbox_url: Url::parse(&format!("{}/inbox", ap_id)).expect("valid url"),
             shared_inbox_url: Url::parse(&format!("{}/inbox", base_url)).ok(),
-            outbox_url: Url::parse(&format!("{}/outbox", &ap_id)).expect("valid url"),
-            followers_url: Url::parse(&format!("{}/followers", &ap_id)).expect("valid url"),
-            following_url: Url::parse(&format!("{}/following", &ap_id)).expect("valid url"),
+            outbox_url: Url::parse(&format!("{}/outbox", ap_id)).expect("valid url"),
+            followers_url: Url::parse(&format!("{}/followers", ap_id)).expect("valid url"),
+            following_url: Url::parse(&format!("{}/following", ap_id)).expect("valid url"),
             ap_id,
         }
     }
@@ -285,7 +285,7 @@ impl Object for DbActor {
 
     async fn into_json(self, data: &Data<Self::DataType>) -> Result<Self::Kind, Self::Error> {
         let public_key = PublicKey {
-            id: format!("{}#main-key", &self.ap_id),
+            id: format!("{}#main-key", self.ap_id),
             owner: self.ap_id.clone(),
             public_key_pem: self.public_key_pem.clone(),
         };
