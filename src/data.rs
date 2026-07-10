@@ -41,6 +41,13 @@ pub enum FederationEvent {
         owner_user_id: uuid::Uuid,
         follower_inbox_url: String,
     },
+    /// A remote actor accepted our outbound follow request.
+    /// Call `ActivityPubService::import_remote_outbox(outbox_url, actor_url)` to backfill.
+    OutboundFollowAccepted {
+        local_user_id: uuid::Uuid,
+        remote_actor_url: String,
+        outbox_url: Option<String>,
+    },
 }
 
 /// Receives typed federation events.

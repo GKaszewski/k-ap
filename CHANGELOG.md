@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2] — 2026-07-10
+
+### New features
+
+- `FederationEvent::OutboundFollowAccepted { local_user_id, remote_actor_url, outbox_url }` — emitted when a remote actor accepts our outbound follow request. Consumers should call `import_remote_outbox(outbox_url, actor_url)` to backfill the remote user's content. Without this event, outbound follow acceptance was silent and consumers had no hook to trigger backfill.
+
+---
+
 ## [0.4.1] — 2026-06-30
 
 ### Bug fixes
