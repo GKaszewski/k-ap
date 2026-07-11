@@ -6,6 +6,7 @@ use crate::data::FederationData;
 use crate::error::Error;
 
 const NODEINFO_2_0_REL: &str = "http://nodeinfo.diaspora.software/ns/schema/2.0";
+const NODEINFO_2_0_SCHEMA: &str = "http://nodeinfo.diaspora.software/ns/schema/2.0#";
 
 #[derive(Serialize)]
 pub struct NodeInfoWellKnown {
@@ -39,6 +40,8 @@ pub struct NodeInfoUsers {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
+    #[serde(rename = "$schema")]
+    pub schema: String,
     pub version: String,
     pub software: NodeInfoSoftware,
     pub protocols: Vec<String>,
@@ -63,6 +66,7 @@ pub async fn nodeinfo_handler(data: Data<FederationData>) -> Result<Json<NodeInf
     let local_posts = data.content_reader.count_local_posts().await.unwrap_or(0);
 
     Ok(Json(NodeInfo {
+        schema: NODEINFO_2_0_SCHEMA.to_string(),
         version: "2.0".to_string(),
         software: NodeInfoSoftware {
             name: data.software_name.clone(),

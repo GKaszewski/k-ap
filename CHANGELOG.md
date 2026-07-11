@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.3] — 2026-07-11
+
+### Bug fixes
+
+- NodeInfo 2.0 response now includes the required `$schema` field (`http://nodeinfo.diaspora.software/ns/schema/2.0#`). Validators like browser.pub rejected the previous response for missing it.
+
+---
+
 ## [0.4.2] — 2026-07-10
 
 ### New features

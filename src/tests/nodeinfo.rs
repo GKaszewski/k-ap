@@ -19,6 +19,7 @@ fn nodeinfo_well_known_serializes_correctly() {
 #[test]
 fn nodeinfo_serializes_camel_case() {
     let doc = NodeInfo {
+        schema: "http://nodeinfo.diaspora.software/ns/schema/2.0#".to_string(),
         version: "2.0".to_string(),
         software: NodeInfoSoftware {
             name: "my-app".to_string(),
@@ -32,6 +33,10 @@ fn nodeinfo_serializes_camel_case() {
         open_registrations: false,
     };
     let json = serde_json::to_value(&doc).unwrap();
+    assert_eq!(
+        json["$schema"],
+        "http://nodeinfo.diaspora.software/ns/schema/2.0#"
+    );
     assert_eq!(json["version"], "2.0");
     assert_eq!(json["software"]["name"], "my-app");
     assert_eq!(json["usage"]["users"]["total"], 3);
