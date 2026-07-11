@@ -6,6 +6,10 @@
 
 - Actor cache TTL now treats `fetched_at: None` as always-stale instead of always-fresh. Consumers who never populated `fetched_at` were silently getting no cache invalidation.
 
+### Other improvements
+
+- Structured tracing on key code paths: inbound activity dispatch (activity ID, source domain), outbound delivery (inbox count, retry attempts), actor cache lookups (hit/miss, staleness).
+
 ---
 
 ## [0.4.3] — 2026-07-11

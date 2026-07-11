@@ -43,9 +43,17 @@ impl ActivityPubService {
                     tracing::debug!(actor_url, "fetched_at is None, treating as stale — consider populating fetched_at in get_remote_actor()");
                     false
                 });
+            tracing::debug!(
+                actor_url,
+                cache_hit = true,
+                fresh = is_fresh,
+                "actor cache lookup"
+            );
             if is_fresh {
                 return Ok(cached);
             }
+        } else {
+            tracing::debug!(actor_url, cache_hit = false, "actor cache lookup");
         }
         let url = match Url::parse(actor_url) {
             Ok(u) => u,

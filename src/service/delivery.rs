@@ -16,6 +16,11 @@ pub(crate) async fn send_with_retry(
     max_attempts: u32,
     initial_delay_secs: u64,
 ) -> Vec<anyhow::Error> {
+    tracing::info!(
+        inbox_count = sends.len(),
+        max_attempts,
+        "starting outbound delivery"
+    );
     let mut failures = vec![];
     for send in sends {
         let mut delay = std::time::Duration::from_secs(initial_delay_secs);

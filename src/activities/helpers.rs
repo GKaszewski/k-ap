@@ -35,10 +35,11 @@ pub(crate) async fn check_guards(
     actor: &Url,
     data: &Data<FederationData>,
 ) -> Result<bool, Error> {
+    let domain = actor.host_str().unwrap_or("");
+    tracing::info!(activity_id = %id, source_domain = domain, "processing inbound activity");
     if already_processed(id, data).await {
         return Ok(true);
     }
-    let domain = actor.host_str().unwrap_or("");
     if data.blocklist_repo.is_domain_blocked(domain).await? {
         tracing::info!(actor = %actor, "ignoring activity from blocked domain");
         return Ok(true);
