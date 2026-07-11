@@ -25,4 +25,8 @@ fix:
 	cargo fmt
 	cargo clippy --fix --allow-dirty --allow-staged
 
-.PHONY: check fmt fmt-check clippy test fix
+# Publish to the gitea registry.
+publish: check
+	cargo publish --registry gitea
+
+.PHONY: check fmt fmt-check clippy test fix publish
