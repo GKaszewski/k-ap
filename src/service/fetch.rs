@@ -39,7 +39,10 @@ impl ActivityPubService {
                     let age = chrono::Utc::now().signed_duration_since(t);
                     age < chrono::Duration::from_std(data.actor_cache_ttl).unwrap_or_default()
                 })
-                .unwrap_or(true);
+                .unwrap_or_else(|| {
+                    tracing::debug!(actor_url, "fetched_at is None, treating as stale — consider populating fetched_at in get_remote_actor()");
+                    false
+                });
             if is_fresh {
                 return Ok(cached);
             }

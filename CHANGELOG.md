@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.4] — 2026-07-11
+
+### Bug fixes
+
+- Actor cache TTL now treats `fetched_at: None` as always-stale instead of always-fresh. Consumers who never populated `fetched_at` were silently getting no cache invalidation.
+
+---
+
 ## [0.4.3] — 2026-07-11
 
 ### Bug fixes
