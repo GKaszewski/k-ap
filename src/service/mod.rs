@@ -62,6 +62,9 @@ pub struct ActivityPubServiceBuilder {
     delivery_initial_delay_secs: u64,
     signed_fetch_actor_id: Option<uuid::Uuid>,
     actor_cache_ttl_secs: u64,
+    nodeinfo_services_inbound: Vec<String>,
+    nodeinfo_services_outbound: Vec<String>,
+    nodeinfo_metadata: serde_json::Value,
 }
 
 impl ActivityPubServiceBuilder {
@@ -125,6 +128,17 @@ impl ActivityPubServiceBuilder {
         self
     }
 
+    pub fn nodeinfo_services(mut self, inbound: Vec<String>, outbound: Vec<String>) -> Self {
+        self.nodeinfo_services_inbound = inbound;
+        self.nodeinfo_services_outbound = outbound;
+        self
+    }
+
+    pub fn nodeinfo_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.nodeinfo_metadata = metadata;
+        self
+    }
+
     /// Set a local actor whose keypair signs all outgoing fetch requests
     /// (HTTP Signature on GETs). Required for federating with instances
     /// that enforce authorized-fetch / Secure Mode.
@@ -168,7 +182,12 @@ impl ActivityPubServiceBuilder {
             self.software_name,
             self.event_publisher,
             std::time::Duration::from_secs(self.actor_cache_ttl_secs),
-        );
+        )
+        .with_nodeinfo_services(
+            self.nodeinfo_services_inbound,
+            self.nodeinfo_services_outbound,
+        )
+        .with_nodeinfo_metadata(self.nodeinfo_metadata);
         let signing_actor = if let Some(uid) = self.signed_fetch_actor_id {
             let actor = crate::actors::build_local_actor(
                 uid,
@@ -211,6 +230,9 @@ impl ActivityPubService {
             delivery_initial_delay_secs: DELIVERY_INITIAL_DELAY_SECS,
             signed_fetch_actor_id: None,
             actor_cache_ttl_secs: ACTOR_CACHE_TTL_SECS,
+            nodeinfo_services_inbound: vec![],
+            nodeinfo_services_outbound: vec![],
+            nodeinfo_metadata: serde_json::json!({}),
         }
     }
 

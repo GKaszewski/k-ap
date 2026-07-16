@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.6] — 2026-07-16
+
+### New features
+
+- `ActivityPubServiceBuilder::nodeinfo_services(inbound, outbound)` — forward NodeInfo services config through the builder
+- `ActivityPubServiceBuilder::nodeinfo_metadata(value)` — forward arbitrary NodeInfo metadata through the builder
+
+---
+
 ## [0.4.5] — 2026-07-16
 
 ### Bug fixes
