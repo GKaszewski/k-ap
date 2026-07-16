@@ -71,6 +71,9 @@ pub struct FederationData {
     pub(crate) software_name: String,
     pub(crate) event_publisher: Option<Arc<dyn EventPublisher>>,
     pub(crate) actor_cache_ttl: std::time::Duration,
+    pub(crate) nodeinfo_services_inbound: Vec<String>,
+    pub(crate) nodeinfo_services_outbound: Vec<String>,
+    pub(crate) nodeinfo_metadata: serde_json::Value,
 }
 
 impl FederationData {
@@ -110,6 +113,20 @@ impl FederationData {
             software_name,
             event_publisher,
             actor_cache_ttl,
+            nodeinfo_services_inbound: vec![],
+            nodeinfo_services_outbound: vec![],
+            nodeinfo_metadata: serde_json::json!({}),
         }
+    }
+
+    pub fn with_nodeinfo_services(mut self, inbound: Vec<String>, outbound: Vec<String>) -> Self {
+        self.nodeinfo_services_inbound = inbound;
+        self.nodeinfo_services_outbound = outbound;
+        self
+    }
+
+    pub fn with_nodeinfo_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.nodeinfo_metadata = metadata;
+        self
     }
 }

@@ -19,27 +19,31 @@ fn nodeinfo_well_known_serializes_correctly() {
 #[test]
 fn nodeinfo_serializes_camel_case() {
     let doc = NodeInfo {
-        schema: "http://nodeinfo.diaspora.software/ns/schema/2.0#".to_string(),
         version: "2.0".to_string(),
         software: NodeInfoSoftware {
             name: "my-app".to_string(),
             version: "0.1.0".to_string(),
         },
         protocols: vec!["activitypub".to_string()],
+        services: NodeInfoServices {
+            inbound: vec![],
+            outbound: vec![],
+        },
+        open_registrations: false,
         usage: NodeInfoUsage {
             users: NodeInfoUsers { total: 3 },
             local_posts: 42,
         },
-        open_registrations: false,
+        metadata: serde_json::json!({}),
     };
     let json = serde_json::to_value(&doc).unwrap();
-    assert_eq!(
-        json["$schema"],
-        "http://nodeinfo.diaspora.software/ns/schema/2.0#"
-    );
+    assert!(json.get("$schema").is_none());
     assert_eq!(json["version"], "2.0");
     assert_eq!(json["software"]["name"], "my-app");
     assert_eq!(json["usage"]["users"]["total"], 3);
     assert_eq!(json["usage"]["localPosts"], 42);
     assert_eq!(json["openRegistrations"], false);
+    assert_eq!(json["services"]["inbound"], serde_json::json!([]));
+    assert_eq!(json["services"]["outbound"], serde_json::json!([]));
+    assert_eq!(json["metadata"], serde_json::json!({}));
 }

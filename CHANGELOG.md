@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.5] — 2026-07-16
+
+### Bug fixes
+
+- Remove invalid `$schema` field from NodeInfo 2.0 response — the field is not allowed by the NodeInfo 2.0 schema (`additionalProperties: false`)
+- Add missing required `services` and `metadata` fields to NodeInfo 2.0 response
+
+### New features
+
+- `FederationData::with_nodeinfo_services(inbound, outbound)` — configure NodeInfo `services.inbound`/`services.outbound`
+- `FederationData::with_nodeinfo_metadata(value)` — set arbitrary NodeInfo `metadata`
+
+---
+
 ## [0.4.4] — 2026-07-11
 
 ### Bug fixes

@@ -6,7 +6,6 @@ use crate::data::FederationData;
 use crate::error::Error;
 
 const NODEINFO_2_0_REL: &str = "http://nodeinfo.diaspora.software/ns/schema/2.0";
-const NODEINFO_2_0_SCHEMA: &str = "http://nodeinfo.diaspora.software/ns/schema/2.0#";
 
 #[derive(Serialize)]
 pub struct NodeInfoWellKnown {
@@ -38,15 +37,21 @@ pub struct NodeInfoUsers {
 }
 
 #[derive(Serialize)]
+pub struct NodeInfoServices {
+    pub inbound: Vec<String>,
+    pub outbound: Vec<String>,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeInfo {
-    #[serde(rename = "$schema")]
-    pub schema: String,
     pub version: String,
     pub software: NodeInfoSoftware,
     pub protocols: Vec<String>,
-    pub usage: NodeInfoUsage,
+    pub services: NodeInfoServices,
     pub open_registrations: bool,
+    pub usage: NodeInfoUsage,
+    pub metadata: serde_json::Value,
 }
 
 pub async fn nodeinfo_well_known_handler(
@@ -66,18 +71,22 @@ pub async fn nodeinfo_handler(data: Data<FederationData>) -> Result<Json<NodeInf
     let local_posts = data.content_reader.count_local_posts().await.unwrap_or(0);
 
     Ok(Json(NodeInfo {
-        schema: NODEINFO_2_0_SCHEMA.to_string(),
         version: "2.0".to_string(),
         software: NodeInfoSoftware {
             name: data.software_name.clone(),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
         protocols: vec!["activitypub".to_string()],
+        services: NodeInfoServices {
+            inbound: data.nodeinfo_services_inbound.clone(),
+            outbound: data.nodeinfo_services_outbound.clone(),
+        },
+        open_registrations: data.allow_registration,
         usage: NodeInfoUsage {
             users: NodeInfoUsers { total: user_count },
             local_posts,
         },
-        open_registrations: data.allow_registration,
+        metadata: data.nodeinfo_metadata.clone(),
     }))
 }
 
