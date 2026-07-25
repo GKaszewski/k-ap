@@ -52,9 +52,9 @@ impl Activity for DeleteActivity {
             _ => String::new(),
         };
         if !object_domain.is_empty() && actor_domain != object_domain {
-            return Err(Error::bad_request(anyhow::anyhow!(
-                "Delete actor domain does not match object domain"
-            )));
+            return Err(Error::bad_request(
+                "Delete actor domain does not match object domain",
+            ));
         }
         Ok(())
     }
@@ -78,17 +78,13 @@ impl Activity for DeleteActivity {
             return Ok(());
         };
         if object_url == *self.actor.inner() {
-            data.object_handler
-                .on_actor_removed(&actor_url)
-                .await
-                .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
+            data.object_handler.on_actor_removed(&actor_url).await?;
             tracing::info!(actor = %actor_url, "received Delete(actor) — remote account deleted");
             return Ok(());
         }
         data.object_handler
             .on_delete(&object_url, &actor_url)
-            .await
-            .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
+            .await?;
         tracing::info!(object = %object_url, "received Delete(note)");
         Ok(())
     }

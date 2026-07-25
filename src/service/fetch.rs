@@ -17,8 +17,7 @@ impl ActivityPubService {
             crate::data::FederationData,
             serde_json::Value,
         >(url, &data)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .await?;
         Ok(res.object)
     }
 

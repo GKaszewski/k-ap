@@ -47,6 +47,53 @@ pub(crate) async fn check_guards(
     Ok(false)
 }
 
+pub(crate) fn verify_attributed_to(
+    object: &serde_json::Value,
+    actor: &Url,
+    activity_name: &str,
+) -> Result<(), Error> {
+    let attributed_to = object.get("attributedTo").ok_or_else(|| {
+        Error::bad_request(format!("{activity_name} object missing attributedTo"))
+    })?;
+
+    let actor_urls: Vec<&str> = if let Some(url_str) = attributed_to.as_str() {
+        vec![url_str]
+    } else if let Some(array) = attributed_to.as_array() {
+        array
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .as_str()
+                    .or_else(|| entry.get("id").and_then(|id| id.as_str()))
+            })
+            .collect()
+    } else {
+        return Err(Error::bad_request(format!(
+            "{activity_name} object has invalid attributedTo",
+        )));
+    };
+
+    let matches_actor = actor_urls
+        .iter()
+        .any(|url_str| Url::parse(url_str).as_ref() == Ok(actor));
+
+    if !matches_actor {
+        return Err(Error::bad_request(format!(
+            "{activity_name} actor does not match object attributedTo",
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn extract_object_ap_id(object: &serde_json::Value, fallback: &Url) -> Url {
+    object
+        .get("id")
+        .and_then(|value| value.as_str())
+        .and_then(|id_str| Url::parse(id_str).ok())
+        .unwrap_or_else(|| fallback.clone())
+}
+
 /// Parse `object["tag"]` for `Mention` entries and notify each tagged local user.
 /// Failures are logged and never propagated — a broken mention must not fail the activity.
 pub(crate) async fn extract_and_dispatch_mentions(
@@ -55,7 +102,7 @@ pub(crate) async fn extract_and_dispatch_mentions(
     object: &serde_json::Value,
     data: &Data<FederationData>,
 ) {
-    let Some(tags) = object.get("tag").and_then(|t| t.as_array()) else {
+    let Some(tags) = object.get("tag").and_then(|tags| tags.as_array()) else {
         return;
     };
     for tag in tags {
@@ -68,7 +115,7 @@ pub(crate) async fn extract_and_dispatch_mentions(
         let Ok(href_url) = Url::parse(href) else {
             continue;
         };
-        let Some(mentioned_user_id) = crate::urls::extract_user_id_from_url(&href_url) else {
+        let Some(mentioned_user_id) = data.url_scheme.extract_user_id(&href_url) else {
             continue;
         };
         if let Err(e) = data

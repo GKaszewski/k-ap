@@ -12,7 +12,7 @@ Via the private Gitea registry (recommended):
 
 ```toml
 [dependencies]
-k-ap = { version = "0.3.0", registry = "gitea" }
+k-ap = { version = "0.5.0", registry = "gitea" }
 ```
 
 Configure the registry in `.cargo/config.toml`:
@@ -26,21 +26,21 @@ Or via git if you don't have registry access:
 
 ```toml
 [dependencies]
-k-ap = { git = "https://git.gabrielkaszewski.dev/GKaszewski/k-ap.git", tag = "v0.3.0" }
+k-ap = { git = "https://git.gabrielkaszewski.dev/GKaszewski/k-ap.git", tag = "v0.5.0" }
 ```
 
 ## What you implement
 
-Seven focused traits wire your data layer into `k-ap`. Implement them all on a single database struct by cloning the `Arc`, or use separate structs for different backends.
+Seven supertrait facades wire your data layer into `k-ap`. Implement them all on a single database struct by cloning the `Arc`, or use separate structs for different backends.
 
 ```rust
 // Activity deduplication — idempotency for inbound deliveries
 impl ActivityRepository for MyDb { ... }
 
-// Follower / following graph + account migration
+// Follower / following graph + account migration (5 sub-traits)
 impl FollowRepository for MyDb { ... }
 
-// Local keypairs, remote actor cache, boost (Announce) tracking
+// Local keypairs, remote actor cache, boost (Announce) tracking (3 sub-traits)
 impl ActorRepository for MyDb { ... }
 
 // Domain and per-user actor blocklists
@@ -55,6 +55,8 @@ impl ApContentReader for MyDb { ... }
 // Write side — called when the inbox receives AP activities
 impl ApObjectHandler for MyDb { ... }
 ```
+
+`FollowRepository` and `ActorRepository` are composed from fine-grained sub-traits (`FollowerWriter`, `FollowerReader`, `FollowingWriter`, `FollowingReader`, `FollowMigration`, `KeypairRepository`, `RemoteActorCache`, `AnnounceRepository`). Implement the supertrait and Rust auto-derives it, or implement sub-traits individually for more control.
 
 ## Wire up the service
 
@@ -74,6 +76,7 @@ let service = ActivityPubService::builder("https://example.com")
     .object_handler(db.clone())
     .allow_registration(false)
     .software_name("my-app")
+    // .url_scheme(Arc::new(MyScheme))  // optional: customize URL patterns
     .build()
     .await?;
 
@@ -149,15 +152,15 @@ let mentioned = vec![
 ];
 
 // Public — to: [AS_PUBLIC], cc: [followers]; delivered to followers + mentioned
-service.broadcast_create_note(user_id, note_json, ApVisibility::Public, mentioned).await?;
+service.broadcast_create(user_id, note_json, ApVisibility::Public, mentioned).await?;
 
 // Followers only — to: [followers], cc: []; delivered to followers + mentioned
-service.broadcast_create_note(user_id, note_json, ApVisibility::FollowersOnly, vec![]).await?;
+service.broadcast_create(user_id, note_json, ApVisibility::FollowersOnly, vec![]).await?;
 
 // Private — no delivery at all; library returns immediately
-service.broadcast_create_note(user_id, note_json, ApVisibility::Private, vec![]).await?;
+service.broadcast_create(user_id, note_json, ApVisibility::Private, vec![]).await?;
 
-service.broadcast_update_note(user_id, note_json, ApVisibility::Public, vec![]).await?;
+service.broadcast_update(user_id, note_json, ApVisibility::Public, vec![]).await?;
 service.broadcast_delete_to_followers(user_id, ap_id).await?;
 
 // Announce / Undo Announce
@@ -173,6 +176,9 @@ service.broadcast_actor_update(user_id).await?;
 
 // Account migration — sends Move to all followers; set alsoKnownAs first
 service.broadcast_move(user_id, new_actor_url).await?;
+
+// Send arbitrary AP activity JSON to all followers (escape hatch for custom types)
+service.broadcast_raw_to_followers(user_id, activity_json).await?;
 ```
 
 ## Follow management
@@ -287,22 +293,87 @@ Handled out of the box:
 |------|-------------|
 | `ActivityPubService` | Central service — build once, share via `Arc` |
 | `ActivityRepository` | Trait: activity ID deduplication (2 methods) |
-| `FollowRepository` | Trait: follower/following graph + migration (18 methods) |
-| `ActorRepository` | Trait: keypairs, remote actor cache, announce tracking (6 methods) |
+| `FollowRepository` | Supertrait: follower/following graph + migration (19 methods via 5 sub-traits) |
+| &emsp;`FollowerWriter` | Sub-trait: add/remove/update follower records (4 methods) |
+| &emsp;`FollowerReader` | Sub-trait: query followers, counts, pages (7 methods) |
+| &emsp;`FollowingWriter` | Sub-trait: add/remove/update following records (4 methods) |
+| &emsp;`FollowingReader` | Sub-trait: query following, counts, pages (3 methods) |
+| &emsp;`FollowMigration` | Sub-trait: account migration (1 method, has default no-op) |
+| `ActorRepository` | Supertrait: keypairs, remote actor cache, announce tracking (7 methods via 3 sub-traits) |
+| &emsp;`KeypairRepository` | Sub-trait: local actor keypair storage (2 methods) |
+| &emsp;`RemoteActorCache` | Sub-trait: remote actor upsert/lookup (2 methods) |
+| &emsp;`AnnounceRepository` | Sub-trait: boost tracking (3 methods) |
 | `BlocklistRepository` | Trait: domain and actor blocklists (8 methods) |
 | `ApUserRepository` | Trait: user lookup (3 methods) |
 | `ApContentReader` | Trait: outbox/backfill/featured content (3 methods, 1 with default) |
-| `ApObjectHandler` | Trait: inbound activity callbacks (9 methods, 2 with defaults) |
+| `ApObjectHandler` | Trait: inbound activity callbacks (11 methods, 2 with defaults) |
+| `UrlScheme` / `DefaultUrlScheme` | Trait + default impl: configurable URL patterns for actors and activities |
 | `ApVisibility` | `Public` / `FollowersOnly` / `Private` |
 | `ApActorType` | `Person` / `Service` / `Application` / `Organization` / `Group` |
-| `FederationEvent` | `DeliveryRequested` / `DeliveryFailed` / `BackfillRequested` |
+| `LocalObject` | Outbox object with addressing fields (`to`, `cc`, `bto`, `bcc`) |
+| `Keypair` | Named struct for actor signing keypair |
+| `FederationEvent` | `DeliveryRequested` / `DeliveryFailed` / `BackfillRequested` / `OutboundFollowAccepted` |
 | `EventPublisher` | Trait: hook for job queue integration |
 | `LookedUpActor` | Resolved remote actor from `lookup_actor_by_handle` |
 | `RemoteActor` | Cached federated actor record |
 | `Follower` / `FollowerStatus` | Follower with `Pending`/`Accepted`/`Rejected` state |
 | `ApUser` | AP-serializable local user |
 | `ApFederationConfig` | Wraps the `activitypub_federation` config |
-| `Error` | AP-layer error type |
+| `Error` | thiserror enum: `NotFound` / `BadRequest` / `Unauthorized` / `Forbidden` / `Internal` |
+
+## Custom URL schemes
+
+By default k-ap uses `/users/{uuid}` paths. Implement the `UrlScheme` trait to use custom patterns:
+
+```rust
+use k_ap::{UrlScheme, DefaultUrlScheme};
+use std::sync::Arc;
+
+struct MyScheme;
+
+impl UrlScheme for MyScheme {
+    fn actor_url(&self, base_url: &str, user_id: uuid::Uuid) -> anyhow::Result<Url> {
+        // e.g. https://example.com/@username instead of /users/{uuid}
+        todo!()
+    }
+    fn inbox_url(&self, actor_url: &Url) -> anyhow::Result<Url> { todo!() }
+    fn shared_inbox_url(&self, base_url: &str) -> Option<Url> { todo!() }
+    fn outbox_url(&self, actor_url: &Url) -> anyhow::Result<Url> { todo!() }
+    fn followers_url(&self, actor_url: &Url) -> anyhow::Result<Url> { todo!() }
+    fn following_url(&self, actor_url: &Url) -> anyhow::Result<Url> { todo!() }
+    fn activity_url(&self, base_url: &str) -> anyhow::Result<Url> { todo!() }
+    fn extract_user_id(&self, url: &Url) -> Option<uuid::Uuid> { todo!() }
+}
+
+let service = ActivityPubService::builder("https://example.com")
+    .url_scheme(Arc::new(MyScheme))
+    // ...repos...
+    .build()
+    .await?;
+```
+
+## Testing
+
+k-ap ships mock builders for all traits (not behind `#[cfg(test)]` so downstream crates can use them):
+
+```rust
+use k_ap::testing::*;
+
+let follow_repo = MockFollowRepoBuilder::new()
+    .on_add_follower(|id, url, status, _| Ok(()))
+    .on_count_accepted_followers(|_| Ok(42))
+    .build();
+
+let actor_repo = MockActorRepoBuilder::new().build();
+let blocklist_repo = MockBlocklistRepoBuilder::new().build();
+let activity_repo = MockActivityRepoBuilder::new().build();
+let user_repo = MockUserRepoBuilder::new().build();
+let content_reader = MockContentReaderBuilder::new().build();
+let object_handler = MockObjectHandlerBuilder::new().build();
+let event_publisher = MockEventPublisherBuilder::new().build();
+```
+
+Every unset method defaults to `Ok(Default::default())`.
 
 ## Local development
 

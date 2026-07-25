@@ -40,14 +40,13 @@ pub async fn webfinger_handler(
     let user = data
         .user_repo
         .find_by_username(name)
-        .await
-        .map_err(Error::from)?
-        .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found")))?;
+        .await?
+        .ok_or_else(|| Error::not_found("user not found"))?;
 
-    let ap_id = crate::urls::actor_url(&data.base_url, user.id);
+    let ap_id = data.url_scheme.actor_url(&data.base_url, user.id)?;
     let acct_uri = format!("acct:{}@{}", user.username, data.domain);
 
-    let wf = WebfingerResponse {
+    let response = WebfingerResponse {
         subject: query.resource.clone(),
         aliases: vec![acct_uri, ap_id.to_string()],
         links: vec![
@@ -58,12 +57,12 @@ pub async fn webfinger_handler(
             },
             WebfingerLink {
                 rel: "self".to_string(),
-                kind: Some("application/activity+json".to_string()),
+                kind: Some(crate::urls::AP_CONTENT_TYPE.to_string()),
                 href: Some(ap_id.to_string()),
             },
         ],
     };
 
-    let body = serde_json::to_string(&wf).map_err(|e| Error::from(anyhow::anyhow!(e)))?;
+    let body = serde_json::to_string(&response).map_err(|error| anyhow::anyhow!(error))?;
     Ok(([(header::CONTENT_TYPE, "application/jrd+json")], body).into_response())
 }

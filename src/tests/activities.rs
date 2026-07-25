@@ -1,470 +1,149 @@
 /// Business-logic tests for activity receive() implementations.
 ///
-/// These tests exercise each activity handler with in-memory stubs,
+/// These tests exercise each activity handler with mock builders,
 /// verifying the correct callbacks fire and the correct repo mutations happen.
-/// Activities that require outbound HTTP (Follow → dereference actor) are tested
+/// Activities that require outbound HTTP (Follow -> dereference actor) are tested
 /// only for their early-return paths; the happy path requires a real HTTP stack.
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use activitypub_federation::{config::FederationConfig, fetch::object_id::ObjectId};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 use url::Url;
 
+use crate::activities::announce::AnnounceType;
+use crate::activities::block::BlockType;
+use crate::activities::like::LikeType;
 use crate::activities::{
-    AcceptActivity, AddActivity, AnnounceActivity, AnnounceType, BlockActivity, BlockType,
-    CreateActivity, DeleteActivity, FollowActivity, LikeActivity, LikeType, RejectActivity,
-    UndoActivity, UpdateActivity,
+    AcceptActivity, AddActivity, AnnounceActivity, BlockActivity, CreateActivity, DeleteActivity,
+    FollowActivity, LikeActivity, RejectActivity, UndoActivity, UpdateActivity,
 };
-use crate::content::{ApContentReader, ApObjectHandler};
 use crate::data::FederationData;
-use crate::repository::{
-    ActivityRepository, ActorRepository, BlockedDomain, BlocklistRepository, FollowRepository,
-    Follower, FollowerStatus, FollowingStatus, RemoteActor,
+use crate::repository::FollowingStatus;
+use crate::testing::{
+    MockActivityRepoBuilder, MockActorRepoBuilder, MockBlocklistRepoBuilder,
+    MockContentReaderBuilder, MockFollowRepoBuilder, MockObjectHandlerBuilder, MockUserRepoBuilder,
 };
-use crate::user::{ApActorType, ApUser, ApUserRepository};
+use crate::user::{ApActorType, ApUser};
 
-// ── Stubs ─────────────────────────────────────────────────────────────────────
+// ── Mock-builder-based tracking ─────────────────────────────────────────────
 
+fn make_user(id: uuid::Uuid, username: &str) -> ApUser {
+    ApUser {
+        id,
+        username: username.to_string(),
+        display_name: None,
+        bio: None,
+        avatar_url: None,
+        banner_url: None,
+        also_known_as: vec![],
+        profile_url: None,
+        attachment: vec![],
+        manually_approves_followers: true,
+        discoverable: true,
+        actor_type: ApActorType::Person,
+        featured_url: None,
+    }
+}
+
+/// Tracking vectors for object handler callbacks.
 #[derive(Default)]
-struct MemActivityRepo {
-    processed: Mutex<HashSet<String>>,
+struct HandlerTracking {
+    creates: Arc<Mutex<Vec<(Url, Url)>>>,
+    updates: Arc<Mutex<Vec<(Url, Url)>>>,
+    deletes: Arc<Mutex<Vec<(Url, Url)>>>,
+    actors_removed: Arc<Mutex<Vec<Url>>>,
+    likes: Arc<Mutex<Vec<(Url, Url)>>>,
+    unlikes: Arc<Mutex<Vec<(Url, Url)>>>,
+    announces_received: Arc<Mutex<Vec<(Url, Url)>>>,
+    announces_removed: Arc<Mutex<Vec<(Url, Url)>>>,
+    announces_of_remote: Arc<Mutex<Vec<(Url, Url)>>>,
+    mentions: Arc<Mutex<Vec<(Url, uuid::Uuid)>>>,
 }
 
-#[async_trait]
-impl ActivityRepository for MemActivityRepo {
-    async fn is_activity_processed(&self, id: &str) -> anyhow::Result<bool> {
-        Ok(self.processed.lock().await.contains(id))
-    }
-    async fn mark_activity_processed(&self, id: &str) -> anyhow::Result<()> {
-        self.processed.lock().await.insert(id.to_string());
-        Ok(())
-    }
-}
+impl HandlerTracking {
+    fn build_handler(&self) -> Arc<crate::testing::MockObjectHandler> {
+        let creates = self.creates.clone();
+        let updates = self.updates.clone();
+        let deletes = self.deletes.clone();
+        let actors_removed = self.actors_removed.clone();
+        let likes = self.likes.clone();
+        let unlikes = self.unlikes.clone();
+        let announces_received = self.announces_received.clone();
+        let announces_removed = self.announces_removed.clone();
+        let announces_of_remote = self.announces_of_remote.clone();
+        let mentions = self.mentions.clone();
 
-/// Tracking follow repo — records every mutating call for assertion.
-#[derive(Default)]
-struct MemFollowRepo {
-    // recorded mutations
-    added_followers: Mutex<Vec<(uuid::Uuid, String, FollowerStatus)>>,
-    removed_followers: Mutex<Vec<(uuid::Uuid, String)>>,
-    removed_following: Mutex<Vec<(uuid::Uuid, String)>>,
-    following_status_updates: Mutex<Vec<(uuid::Uuid, String, FollowingStatus)>>,
-}
-
-#[async_trait]
-impl FollowRepository for MemFollowRepo {
-    async fn add_follower(
-        &self,
-        local_user_id: uuid::Uuid,
-        remote_actor_url: &str,
-        status: FollowerStatus,
-        _: &str,
-    ) -> anyhow::Result<()> {
-        self.added_followers.lock().await.push((
-            local_user_id,
-            remote_actor_url.to_string(),
-            status,
-        ));
-        Ok(())
-    }
-    async fn get_follower_follow_activity_id(
-        &self,
-        _: uuid::Uuid,
-        _: &str,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-    async fn remove_follower(
-        &self,
-        local_user_id: uuid::Uuid,
-        remote_actor_url: &str,
-    ) -> anyhow::Result<()> {
-        self.removed_followers
-            .lock()
-            .await
-            .push((local_user_id, remote_actor_url.to_string()));
-        Ok(())
-    }
-    async fn get_followers(&self, _: uuid::Uuid) -> anyhow::Result<Vec<Follower>> {
-        Ok(vec![])
-    }
-    async fn get_followers_page(
-        &self,
-        _: uuid::Uuid,
-        _: u32,
-        _: usize,
-    ) -> anyhow::Result<Vec<Follower>> {
-        Ok(vec![])
-    }
-    async fn count_followers(&self, _: uuid::Uuid) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-    async fn update_follower_status(
-        &self,
-        _: uuid::Uuid,
-        _: &str,
-        _: FollowerStatus,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn get_pending_followers(&self, _: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
-        Ok(vec![])
-    }
-    async fn get_accepted_follower_inboxes(&self, _: uuid::Uuid) -> anyhow::Result<Vec<String>> {
-        Ok(vec![])
-    }
-    async fn count_accepted_followers(&self, _: uuid::Uuid) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-    async fn get_accepted_followers_page(
-        &self,
-        _: uuid::Uuid,
-        _: u32,
-        _: usize,
-    ) -> anyhow::Result<Vec<RemoteActor>> {
-        Ok(vec![])
-    }
-    async fn add_following(&self, _: uuid::Uuid, _: RemoteActor, _: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn get_follow_activity_id(
-        &self,
-        _: uuid::Uuid,
-        _: &str,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-    async fn remove_following(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> anyhow::Result<()> {
-        self.removed_following
-            .lock()
-            .await
-            .push((local_user_id, actor_url.to_string()));
-        Ok(())
-    }
-    async fn get_following(&self, _: uuid::Uuid) -> anyhow::Result<Vec<RemoteActor>> {
-        Ok(vec![])
-    }
-    async fn get_following_page(
-        &self,
-        _: uuid::Uuid,
-        _: u32,
-        _: usize,
-    ) -> anyhow::Result<Vec<RemoteActor>> {
-        Ok(vec![])
-    }
-    async fn count_following(&self, _: uuid::Uuid) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-    async fn update_following_status(
-        &self,
-        local_user_id: uuid::Uuid,
-        remote_actor_url: &str,
-        status: FollowingStatus,
-    ) -> anyhow::Result<()> {
-        self.following_status_updates.lock().await.push((
-            local_user_id,
-            remote_actor_url.to_string(),
-            status,
-        ));
-        Ok(())
-    }
-    async fn get_following_outbox_url(
-        &self,
-        _: uuid::Uuid,
-        _: &str,
-    ) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-    async fn migrate_follower_actor(&self, _: &str, _: &str) -> anyhow::Result<Vec<uuid::Uuid>> {
-        Ok(vec![])
+        MockObjectHandlerBuilder::new()
+            .on_on_create(move |ap_id, actor_url, _| {
+                creates
+                    .try_lock()
+                    .unwrap()
+                    .push((ap_id.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_update(move |ap_id, actor_url, _| {
+                updates
+                    .try_lock()
+                    .unwrap()
+                    .push((ap_id.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_delete(move |ap_id, actor_url| {
+                deletes
+                    .try_lock()
+                    .unwrap()
+                    .push((ap_id.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_actor_removed(move |actor_url| {
+                actors_removed.try_lock().unwrap().push(actor_url.clone());
+                Ok(())
+            })
+            .on_on_like(move |object_url, actor_url| {
+                likes
+                    .try_lock()
+                    .unwrap()
+                    .push((object_url.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_unlike(move |object_url, actor_url| {
+                unlikes
+                    .try_lock()
+                    .unwrap()
+                    .push((object_url.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_announce_received(move |object_url, actor_url| {
+                announces_received
+                    .try_lock()
+                    .unwrap()
+                    .push((object_url.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_announce_removed(move |object_url, actor_url| {
+                announces_removed
+                    .try_lock()
+                    .unwrap()
+                    .push((object_url.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_announce_of_remote(move |object_url, actor_url| {
+                announces_of_remote
+                    .try_lock()
+                    .unwrap()
+                    .push((object_url.clone(), actor_url.clone()));
+                Ok(())
+            })
+            .on_on_mention(move |ap_id, user_id, _| {
+                mentions.try_lock().unwrap().push((ap_id.clone(), user_id));
+                Ok(())
+            })
+            .build()
     }
 }
 
-/// Tracking actor repo.
-#[derive(Default)]
-struct MemActorRepo {
-    added_announces: Mutex<Vec<String>>,
-    removed_announces: Mutex<Vec<String>>,
-}
-
-#[async_trait]
-impl ActorRepository for MemActorRepo {
-    async fn get_local_actor_keypair(
-        &self,
-        _: uuid::Uuid,
-    ) -> anyhow::Result<Option<(String, String)>> {
-        Ok(None)
-    }
-    async fn save_local_actor_keypair(
-        &self,
-        _: uuid::Uuid,
-        _: String,
-        _: String,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn upsert_remote_actor(&self, _: RemoteActor) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn get_remote_actor(&self, _: &str) -> anyhow::Result<Option<RemoteActor>> {
-        Ok(None)
-    }
-    async fn add_announce(
-        &self,
-        activity_id: &str,
-        _: &str,
-        _: &str,
-        _: DateTime<Utc>,
-    ) -> anyhow::Result<()> {
-        self.added_announces
-            .lock()
-            .await
-            .push(activity_id.to_string());
-        Ok(())
-    }
-    async fn remove_announce(&self, activity_id: &str, _: &str) -> anyhow::Result<()> {
-        self.removed_announces
-            .lock()
-            .await
-            .push(activity_id.to_string());
-        Ok(())
-    }
-    async fn count_announces(&self, _: &str) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-}
-
-struct MemBlocklistRepo {
-    blocked_domains: HashSet<String>,
-    blocked_actors: HashSet<(uuid::Uuid, String)>,
-}
-
-impl MemBlocklistRepo {
-    fn blocking_domain(domain: &str) -> Self {
-        let mut blocked_domains = HashSet::new();
-        blocked_domains.insert(domain.to_string());
-        Self {
-            blocked_domains,
-            blocked_actors: HashSet::new(),
-        }
-    }
-    fn blocking_actor(local_user_id: uuid::Uuid, actor_url: &str) -> Self {
-        let mut blocked_actors = HashSet::new();
-        blocked_actors.insert((local_user_id, actor_url.to_string()));
-        Self {
-            blocked_domains: HashSet::new(),
-            blocked_actors,
-        }
-    }
-}
-
-impl Default for MemBlocklistRepo {
-    fn default() -> Self {
-        Self {
-            blocked_domains: HashSet::new(),
-            blocked_actors: HashSet::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl BlocklistRepository for MemBlocklistRepo {
-    async fn add_blocked_domain(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn remove_blocked_domain(&self, _: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn get_blocked_domains(&self) -> anyhow::Result<Vec<BlockedDomain>> {
-        Ok(vec![])
-    }
-    async fn is_domain_blocked(&self, domain: &str) -> anyhow::Result<bool> {
-        Ok(self.blocked_domains.contains(domain))
-    }
-    async fn add_blocked_actor(&self, _: uuid::Uuid, _: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn remove_blocked_actor(&self, _: uuid::Uuid, _: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn get_blocked_actors(&self, _: uuid::Uuid) -> anyhow::Result<Vec<String>> {
-        Ok(vec![])
-    }
-    async fn is_actor_blocked(
-        &self,
-        local_user_id: uuid::Uuid,
-        actor_url: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(self
-            .blocked_actors
-            .contains(&(local_user_id, actor_url.to_string())))
-    }
-}
-
-struct MemUserRepo {
-    user_id: uuid::Uuid,
-    username: String,
-}
-
-impl MemUserRepo {
-    fn new(user_id: uuid::Uuid, username: &str) -> Self {
-        Self {
-            user_id,
-            username: username.to_string(),
-        }
-    }
-}
-
-#[async_trait]
-impl ApUserRepository for MemUserRepo {
-    async fn find_by_id(&self, id: uuid::Uuid) -> anyhow::Result<Option<ApUser>> {
-        if id == self.user_id {
-            Ok(Some(ApUser {
-                id,
-                username: self.username.clone(),
-                display_name: None,
-                bio: None,
-                avatar_url: None,
-                banner_url: None,
-                also_known_as: vec![],
-                profile_url: None,
-                attachment: vec![],
-                manually_approves_followers: true,
-                discoverable: true,
-                actor_type: ApActorType::Person,
-                featured_url: None,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-    async fn find_by_username(&self, _: &str) -> anyhow::Result<Option<ApUser>> {
-        Ok(None)
-    }
-    async fn count_users(&self) -> anyhow::Result<usize> {
-        Ok(1)
-    }
-}
-
-/// Tracking object handler — records every callback for assertion.
-#[derive(Default)]
-struct MemHandler {
-    creates: Mutex<Vec<(Url, Url)>>, // (ap_id, actor_url)
-    updates: Mutex<Vec<(Url, Url)>>,
-    deletes: Mutex<Vec<(Url, Url)>>,
-    actors_removed: Mutex<Vec<Url>>,
-    likes: Mutex<Vec<(Url, Url)>>,
-    unlikes: Mutex<Vec<(Url, Url)>>,
-    announces_received: Mutex<Vec<(Url, Url)>>,
-    announces_removed: Mutex<Vec<(Url, Url)>>,
-    announces_of_remote: Mutex<Vec<(Url, Url)>>,
-    mentions: Mutex<Vec<(Url, uuid::Uuid)>>,
-}
-
-#[async_trait]
-impl ApObjectHandler for MemHandler {
-    async fn on_create(
-        &self,
-        ap_id: &Url,
-        actor_url: &Url,
-        _: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        self.creates
-            .lock()
-            .await
-            .push((ap_id.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_update(
-        &self,
-        ap_id: &Url,
-        actor_url: &Url,
-        _: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        self.updates
-            .lock()
-            .await
-            .push((ap_id.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_delete(&self, ap_id: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.deletes
-            .lock()
-            .await
-            .push((ap_id.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_actor_removed(&self, actor_url: &Url) -> anyhow::Result<()> {
-        self.actors_removed.lock().await.push(actor_url.clone());
-        Ok(())
-    }
-    async fn on_like(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.likes
-            .lock()
-            .await
-            .push((object_url.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_unlike(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.unlikes
-            .lock()
-            .await
-            .push((object_url.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_announce_received(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.announces_received
-            .lock()
-            .await
-            .push((object_url.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_announce_removed(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.announces_removed
-            .lock()
-            .await
-            .push((object_url.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_announce_of_remote(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()> {
-        self.announces_of_remote
-            .lock()
-            .await
-            .push((object_url.clone(), actor_url.clone()));
-        Ok(())
-    }
-    async fn on_mention(&self, ap_id: &Url, user_id: uuid::Uuid, _: &Url) -> anyhow::Result<()> {
-        self.mentions.lock().await.push((ap_id.clone(), user_id));
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct MemContentReader;
-
-#[async_trait]
-impl ApContentReader for MemContentReader {
-    async fn get_local_objects_page(
-        &self,
-        _: uuid::Uuid,
-        _: Option<DateTime<Utc>>,
-        _: usize,
-    ) -> anyhow::Result<Vec<(Url, serde_json::Value, DateTime<Utc>)>> {
-        Ok(vec![])
-    }
-    async fn count_local_posts(&self) -> anyhow::Result<u64> {
-        Ok(0)
-    }
-}
-
-// ── Test helpers ──────────────────────────────────────────────────────────────
+// ── Test helpers ─────────────────────────────────────────────────────────────
 
 const LOCAL_DOMAIN: &str = "example.com";
 const BASE_URL: &str = "https://example.com";
@@ -496,31 +175,108 @@ fn remote_note_url() -> Url {
     "https://other.example/notes/99".parse().unwrap()
 }
 
+/// Shared tracking vectors used by closures in mock builders.
+struct Tracking {
+    added_followers: Arc<Mutex<Vec<(uuid::Uuid, String, crate::repository::FollowerStatus)>>>,
+    removed_followers: Arc<Mutex<Vec<(uuid::Uuid, String)>>>,
+    removed_following: Arc<Mutex<Vec<(uuid::Uuid, String)>>>,
+    following_status_updates: Arc<Mutex<Vec<(uuid::Uuid, String, FollowingStatus)>>>,
+    added_announces: Arc<Mutex<Vec<String>>>,
+    removed_announces: Arc<Mutex<Vec<String>>>,
+}
+
 struct TestSetup {
-    follow_repo: Arc<MemFollowRepo>,
-    actor_repo: Arc<MemActorRepo>,
-    handler: Arc<MemHandler>,
+    tracking: Tracking,
+    handler: HandlerTracking,
     config: FederationConfig<FederationData>,
 }
 
-async fn setup(blocklist: MemBlocklistRepo, local_user_id: uuid::Uuid) -> TestSetup {
-    let follow_repo = Arc::new(MemFollowRepo::default());
-    let actor_repo = Arc::new(MemActorRepo::default());
-    let handler = Arc::new(MemHandler::default());
+async fn setup_with_blocklist(
+    blocklist: Arc<crate::testing::MockBlocklistRepo>,
+    local_user_id: uuid::Uuid,
+) -> TestSetup {
+    let added_followers = Arc::new(Mutex::new(vec![]));
+    let removed_followers = Arc::new(Mutex::new(vec![]));
+    let removed_following = Arc::new(Mutex::new(vec![]));
+    let following_status_updates = Arc::new(Mutex::new(vec![]));
+    let added_announces = Arc::new(Mutex::new(vec![]));
+    let removed_announces = Arc::new(Mutex::new(vec![]));
+
+    let af = added_followers.clone();
+    let rf = removed_followers.clone();
+    let rfw = removed_following.clone();
+    let fsu = following_status_updates.clone();
+    let follow_repo = MockFollowRepoBuilder::new()
+        .on_add_follower(move |id, url, status, _| {
+            af.try_lock().unwrap().push((id, url.to_string(), status));
+            Ok(())
+        })
+        .on_remove_follower(move |id, url| {
+            rf.try_lock().unwrap().push((id, url.to_string()));
+            Ok(())
+        })
+        .on_remove_following(move |id, url| {
+            rfw.try_lock().unwrap().push((id, url.to_string()));
+            Ok(())
+        })
+        .on_update_following_status(move |id, url, status| {
+            fsu.try_lock().unwrap().push((id, url.to_string(), status));
+            Ok(())
+        })
+        .build();
+
+    let aa = added_announces.clone();
+    let ra = removed_announces.clone();
+    let actor_repo = MockActorRepoBuilder::new()
+        .on_add_announce(move |activity_id, _, _, _| {
+            aa.try_lock().unwrap().push(activity_id.to_string());
+            Ok(())
+        })
+        .on_remove_announce(move |activity_id, _| {
+            ra.try_lock().unwrap().push(activity_id.to_string());
+            Ok(())
+        })
+        .build();
+
+    // Activity repo with real dedup tracking
+    let processed = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let p1 = processed.clone();
+    let p2 = processed.clone();
+    let activity_repo = MockActivityRepoBuilder::new()
+        .on_is_activity_processed(move |id| Ok(p1.try_lock().unwrap().contains(id)))
+        .on_mark_activity_processed(move |id| {
+            p2.try_lock().unwrap().insert(id.to_string());
+            Ok(())
+        })
+        .build();
+
+    let handler = HandlerTracking::default();
+
+    let user = make_user(local_user_id, "alice");
+    let user_repo = MockUserRepoBuilder::new()
+        .on_find_by_id(move |id| {
+            if id == local_user_id {
+                Ok(Some(user.clone()))
+            } else {
+                Ok(None)
+            }
+        })
+        .build();
 
     let data = FederationData::new(
-        Arc::new(MemActivityRepo::default()),
-        follow_repo.clone(),
-        actor_repo.clone(),
-        Arc::new(blocklist),
-        Arc::new(MemUserRepo::new(local_user_id, "alice")),
-        Arc::new(MemContentReader),
-        handler.clone(),
+        activity_repo,
+        follow_repo,
+        actor_repo,
+        blocklist,
+        user_repo,
+        MockContentReaderBuilder::new().build(),
+        handler.build_handler(),
         BASE_URL.to_string(),
         false,
         "test".to_string(),
         None,
         std::time::Duration::from_secs(24 * 60 * 60),
+        Arc::new(crate::url_scheme::DefaultUrlScheme),
     );
 
     let config = FederationConfig::builder()
@@ -532,74 +288,71 @@ async fn setup(blocklist: MemBlocklistRepo, local_user_id: uuid::Uuid) -> TestSe
         .unwrap();
 
     TestSetup {
-        follow_repo,
-        actor_repo,
+        tracking: Tracking {
+            added_followers,
+            removed_followers,
+            removed_following,
+            following_status_updates,
+            added_announces,
+            removed_announces,
+        },
         handler,
         config,
     }
 }
 
-// ── AcceptActivity tests ───────────────────────────────────────────────────────
+async fn setup(local_user_id: uuid::Uuid) -> TestSetup {
+    setup_with_blocklist(MockBlocklistRepoBuilder::new().build(), local_user_id).await
+}
+
+// ── AcceptActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn accept_updates_following_status_to_accepted() {
     use activitypub_federation::kinds::activity::AcceptType;
 
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
-    // AP Accept flow:
-    //   Our local actor sent Follow(remote_actor).
-    //   Remote actor responds with Accept(Follow(...)).
-    //
-    // FollowActivity.actor  = our local actor (who sent the Follow)
-    // FollowActivity.object = the remote actor we followed
-    // AcceptActivity.actor  = the remote actor (who accepted)
-    // AcceptActivity.object = the original FollowActivity
-    //
-    // AcceptActivity::receive extracts local_user_id from FollowActivity.actor,
-    // so that URL must be UUID-based (our standard actor URL format).
     let follow = FollowActivity {
         id: activity_url("/follow/1"),
         kind: Default::default(),
-        actor: ObjectId::from(local_actor_url()), // OUR actor sent the Follow
-        object: ObjectId::from(remote_actor_url()), // we followed remote
+        actor: ObjectId::from(local_actor_url()),
+        object: ObjectId::from(remote_actor_url()),
     };
     let accept = AcceptActivity {
         id: activity_url("/accept/1"),
         kind: AcceptType::default(),
-        actor: ObjectId::from(remote_actor_url()), // remote accepts
+        actor: ObjectId::from(remote_actor_url()),
         object: follow,
     };
 
     use activitypub_federation::traits::Activity;
     accept.receive(&data).await.unwrap();
 
-    let updates = s.follow_repo.following_status_updates.lock().await;
+    let updates = s.tracking.following_status_updates.lock().await;
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].0, local_id);
     assert_eq!(updates[0].1, REMOTE_ACTOR);
     assert!(matches!(updates[0].2, FollowingStatus::Accepted));
 }
 
-// ── RejectActivity tests ───────────────────────────────────────────────────────
+// ── RejectActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn reject_removes_following() {
     use activitypub_federation::kinds::activity::RejectType;
 
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
-    // Same actor structure as Accept: local sent Follow(remote), remote rejects.
-    // RejectActivity::receive extracts local_user_id from FollowActivity.actor.
     let follow = FollowActivity {
         id: activity_url("/follow/1"),
         kind: Default::default(),
-        actor: ObjectId::from(local_actor_url()), // OUR actor sent the Follow
-        object: ObjectId::from(remote_actor_url()), // we followed remote
+        actor: ObjectId::from(local_actor_url()),
+        object: ObjectId::from(remote_actor_url()),
     };
     let reject = RejectActivity {
         id: activity_url("/reject/1"),
@@ -611,18 +364,18 @@ async fn reject_removes_following() {
     use activitypub_federation::traits::Activity;
     reject.receive(&data).await.unwrap();
 
-    let removed = s.follow_repo.removed_following.lock().await;
+    let removed = s.tracking.removed_following.lock().await;
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].0, local_id);
     assert_eq!(removed[0].1, REMOTE_ACTOR);
 }
 
-// ── UndoActivity tests ────────────────────────────────────────────────────────
+// ── UndoActivity tests ──────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn undo_follow_removes_follower_and_cleans_content() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let undo = UndoActivity {
@@ -640,7 +393,7 @@ async fn undo_follow_removes_follower_and_cleans_content() {
     use activitypub_federation::traits::Activity;
     undo.receive(&data).await.unwrap();
 
-    let removed = s.follow_repo.removed_followers.lock().await;
+    let removed = s.tracking.removed_followers.lock().await;
     assert_eq!(removed.len(), 1, "follower should be removed");
     assert_eq!(removed[0].0, local_id);
 
@@ -652,7 +405,7 @@ async fn undo_follow_removes_follower_and_cleans_content() {
 #[tokio::test]
 async fn undo_like_calls_on_unlike_for_local_object() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let undo = UndoActivity {
@@ -678,7 +431,7 @@ async fn undo_like_calls_on_unlike_for_local_object() {
 #[tokio::test]
 async fn undo_like_ignores_remote_object() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let undo = UndoActivity {
@@ -689,7 +442,7 @@ async fn undo_like_ignores_remote_object() {
             "type": "Like",
             "id": "https://remote.example/like/2",
             "actor": REMOTE_ACTOR,
-            "object": remote_note_url().as_str(),  // NOT local
+            "object": remote_note_url().as_str(),
         }),
     };
 
@@ -706,7 +459,7 @@ async fn undo_like_ignores_remote_object() {
 #[tokio::test]
 async fn undo_announce_removes_record_and_notifies() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let undo = UndoActivity {
@@ -724,7 +477,7 @@ async fn undo_announce_removes_record_and_notifies() {
     use activitypub_federation::traits::Activity;
     undo.receive(&data).await.unwrap();
 
-    let removed = s.actor_repo.removed_announces.lock().await;
+    let removed = s.tracking.removed_announces.lock().await;
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0], "https://remote.example/announce/1");
 
@@ -736,7 +489,7 @@ async fn undo_announce_removes_record_and_notifies() {
 #[tokio::test]
 async fn undo_announce_ignores_remote_object() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let undo = UndoActivity {
@@ -747,7 +500,7 @@ async fn undo_announce_ignores_remote_object() {
             "type": "Announce",
             "id": "https://remote.example/announce/2",
             "actor": REMOTE_ACTOR,
-            "object": remote_note_url().as_str(),   // NOT local
+            "object": remote_note_url().as_str(),
         }),
     };
 
@@ -755,7 +508,7 @@ async fn undo_announce_ignores_remote_object() {
     undo.receive(&data).await.unwrap();
 
     // remove_announce should still be called (clean up the record)
-    let removed = s.actor_repo.removed_announces.lock().await;
+    let removed = s.tracking.removed_announces.lock().await;
     assert_eq!(
         removed.len(),
         1,
@@ -770,17 +523,17 @@ async fn undo_announce_ignores_remote_object() {
     );
 }
 
-// ── CreateActivity tests ───────────────────────────────────────────────────────
+// ── CreateActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn create_uses_object_id_not_activity_id() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let object_id = "https://remote.example/notes/42";
     let create = CreateActivity {
-        id: activity_url("/create/99"), // activity id — should NOT be used
+        id: activity_url("/create/99"),
         kind: Default::default(),
         actor: ObjectId::from(remote_actor_url()),
         object: serde_json::json!({
@@ -810,7 +563,7 @@ async fn create_uses_object_id_not_activity_id() {
 #[tokio::test]
 async fn create_with_mention_fires_on_mention() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let note_id = "https://remote.example/notes/mention-test";
@@ -843,17 +596,16 @@ async fn create_with_mention_fires_on_mention() {
     );
     assert_eq!(mentions[0].1, local_id);
 
-    // on_create should ALSO fire (mention doesn't replace content delivery)
     let creates = s.handler.creates.lock().await;
     assert_eq!(creates.len(), 1);
 }
 
-// ── UpdateActivity tests ───────────────────────────────────────────────────────
+// ── UpdateActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn update_uses_object_id() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let object_id = "https://remote.example/notes/42";
@@ -874,12 +626,12 @@ async fn update_uses_object_id() {
     assert_eq!(updates[0].0.as_str(), object_id);
 }
 
-// ── DeleteActivity tests ───────────────────────────────────────────────────────
+// ── DeleteActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn delete_object_calls_on_delete() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let note_id = "https://remote.example/notes/to-delete";
@@ -909,15 +661,14 @@ async fn delete_object_calls_on_delete() {
 #[tokio::test]
 async fn delete_actor_calls_on_actor_removed() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
-    // AP actor self-deletion: object URL == actor URL
     let delete = DeleteActivity {
         id: activity_url("/delete/actor"),
         kind: Default::default(),
         actor: ObjectId::from(remote_actor_url()),
-        object: serde_json::json!(REMOTE_ACTOR), // plain URL string
+        object: serde_json::json!(REMOTE_ACTOR),
         to: vec![],
         cc: vec![],
     };
@@ -936,12 +687,12 @@ async fn delete_actor_calls_on_actor_removed() {
     );
 }
 
-// ── AnnounceActivity tests ────────────────────────────────────────────────────
+// ── AnnounceActivity tests ───────────────────────────────────────────────────
 
 #[tokio::test]
 async fn announce_local_object_records_and_notifies() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let announce = AnnounceActivity {
@@ -957,7 +708,7 @@ async fn announce_local_object_records_and_notifies() {
     use activitypub_federation::traits::Activity;
     announce.receive(&data).await.unwrap();
 
-    let added = s.actor_repo.added_announces.lock().await;
+    let added = s.tracking.added_announces.lock().await;
     assert_eq!(added.len(), 1, "announce record should be created");
 
     let notified = s.handler.announces_received.lock().await;
@@ -974,14 +725,14 @@ async fn announce_local_object_records_and_notifies() {
 #[tokio::test]
 async fn announce_remote_object_calls_on_announce_of_remote() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let announce = AnnounceActivity {
         id: activity_url("/announce/2"),
         kind: AnnounceType,
         actor: ObjectId::from(remote_actor_url()),
-        object: remote_note_url(), // NOT local
+        object: remote_note_url(),
         published: None,
         to: vec![],
         cc: vec![],
@@ -1000,19 +751,19 @@ async fn announce_remote_object_calls_on_announce_of_remote() {
         "on_announce_received should NOT fire for remote objects"
     );
 
-    let added = s.actor_repo.added_announces.lock().await;
+    let added = s.tracking.added_announces.lock().await;
     assert!(
         added.is_empty(),
         "announce record should NOT be created for remote objects"
     );
 }
 
-// ── LikeActivity tests ────────────────────────────────────────────────────────
+// ── LikeActivity tests ──────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn like_local_object_calls_on_like() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let like = LikeActivity {
@@ -1033,14 +784,14 @@ async fn like_local_object_calls_on_like() {
 #[tokio::test]
 async fn like_remote_object_is_ignored() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let like = LikeActivity {
         id: activity_url("/like/2"),
         kind: LikeType,
         actor: ObjectId::from(remote_actor_url()),
-        object: remote_note_url(), // NOT local
+        object: remote_note_url(),
     };
 
     use activitypub_federation::traits::Activity;
@@ -1053,17 +804,17 @@ async fn like_remote_object_is_ignored() {
     );
 }
 
-// ── AddActivity tests ─────────────────────────────────────────────────────────
+// ── AddActivity tests ────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn add_uses_object_id_not_activity_id() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let object_id = "https://remote.example/watchlist/item/5";
     let add = AddActivity {
-        id: activity_url("/add/99"), // activity id — should NOT be used
+        id: activity_url("/add/99"),
         kind: Default::default(),
         actor: ObjectId::from(remote_actor_url()),
         object: serde_json::json!({
@@ -1088,12 +839,12 @@ async fn add_uses_object_id_not_activity_id() {
     );
 }
 
-// ── BlockActivity tests ───────────────────────────────────────────────────────
+// ── BlockActivity tests ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn block_removes_follow_relationships() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let block = BlockActivity {
@@ -1106,7 +857,7 @@ async fn block_removes_follow_relationships() {
     use activitypub_federation::traits::Activity;
     block.receive(&data).await.unwrap();
 
-    let removed_following = s.follow_repo.removed_following.lock().await;
+    let removed_following = s.tracking.removed_following.lock().await;
     assert_eq!(
         removed_following.len(),
         1,
@@ -1114,7 +865,7 @@ async fn block_removes_follow_relationships() {
     );
     assert_eq!(removed_following[0].0, local_id);
 
-    let removed_followers = s.follow_repo.removed_followers.lock().await;
+    let removed_followers = s.tracking.removed_followers.lock().await;
     assert_eq!(
         removed_followers.len(),
         1,
@@ -1123,16 +874,15 @@ async fn block_removes_follow_relationships() {
     assert_eq!(removed_followers[0].0, local_id);
 }
 
-// ── Domain / actor blocking ───────────────────────────────────────────────────
+// ── Domain / actor blocking ─────────────────────────────────────────────────
 
 #[tokio::test]
 async fn activity_from_blocked_domain_is_skipped() {
     let local_id = local_user_id();
-    let s = setup(
-        MemBlocklistRepo::blocking_domain("remote.example"),
-        local_id,
-    )
-    .await;
+    let blocklist = MockBlocklistRepoBuilder::new()
+        .on_is_domain_blocked(|domain| Ok(domain == "remote.example"))
+        .build();
+    let s = setup_with_blocklist(blocklist, local_id).await;
     let data = s.config.to_request_data();
 
     let create = CreateActivity {
@@ -1158,13 +908,12 @@ async fn activity_from_blocked_domain_is_skipped() {
 
 #[tokio::test]
 async fn follow_from_blocked_actor_is_skipped_before_http() {
-    // Verifies the SSRF fix: actor block checked BEFORE any HTTP dereference.
     let local_id = local_user_id();
-    let s = setup(
-        MemBlocklistRepo::blocking_actor(local_id, REMOTE_ACTOR),
-        local_id,
-    )
-    .await;
+    let expected_actor = REMOTE_ACTOR.to_string();
+    let blocklist = MockBlocklistRepoBuilder::new()
+        .on_is_actor_blocked(move |uid, url| Ok(uid == local_id && url == expected_actor))
+        .build();
+    let s = setup_with_blocklist(blocklist, local_id).await;
     let data = s.config.to_request_data();
 
     let follow = FollowActivity {
@@ -1175,23 +924,21 @@ async fn follow_from_blocked_actor_is_skipped_before_http() {
     };
 
     use activitypub_federation::traits::Activity;
-    // In debug mode, dereference would be attempted if we got past the block check.
-    // The test passes only if we return early before any HTTP call.
     follow.receive(&data).await.unwrap();
 
-    let added = s.follow_repo.added_followers.lock().await;
+    let added = s.tracking.added_followers.lock().await;
     assert!(
         added.is_empty(),
         "blocked actor follow must be silently discarded"
     );
 }
 
-// ── Idempotency ───────────────────────────────────────────────────────────────
+// ── Idempotency ─────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn duplicate_activity_id_is_skipped() {
     let local_id = local_user_id();
-    let s = setup(MemBlocklistRepo::default(), local_id).await;
+    let s = setup(local_id).await;
     let data = s.config.to_request_data();
 
     let make_create = || CreateActivity {

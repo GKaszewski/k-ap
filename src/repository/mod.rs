@@ -1,57 +1,31 @@
 mod activity;
 mod actor;
+mod actor_blocklist;
+mod announce;
 mod blocklist;
+mod domain_blocklist;
 mod follow;
+mod follow_migration;
+mod follower_reader;
+mod follower_writer;
+mod following_reader;
+mod following_writer;
+mod keypair;
+mod remote_actor_cache;
+mod types;
 
 pub use activity::ActivityRepository;
 pub use actor::ActorRepository;
+pub use actor_blocklist::ActorBlocklist;
+pub use announce::AnnounceRepository;
 pub use blocklist::BlocklistRepository;
+pub use domain_blocklist::DomainBlocklist;
 pub use follow::FollowRepository;
-
-use chrono::{DateTime, Utc};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FollowerStatus {
-    Pending,
-    Accepted,
-    Rejected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FollowingStatus {
-    Pending,
-    Accepted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteActor {
-    pub url: String,
-    pub handle: String,
-    pub inbox_url: String,
-    pub shared_inbox_url: Option<String>,
-    pub display_name: Option<String>,
-    pub avatar_url: Option<String>,
-    pub outbox_url: Option<String>,
-    pub bio: Option<String>,
-    pub banner_url: Option<String>,
-    pub followers_url: Option<String>,
-    pub following_url: Option<String>,
-    pub also_known_as: Vec<String>,
-    /// When this actor was last fetched from the origin instance.
-    /// `None` means unknown — treated as always-fresh to avoid
-    /// breaking existing consumers that don't populate this field.
-    pub fetched_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Follower {
-    pub actor: RemoteActor,
-    pub status: FollowerStatus,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlockedDomain {
-    pub domain: String,
-    pub reason: Option<String>,
-    pub blocked_at: String,
-}
+pub use follow_migration::FollowMigration;
+pub use follower_reader::FollowerReader;
+pub use follower_writer::FollowerWriter;
+pub use following_reader::FollowingReader;
+pub use following_writer::FollowingWriter;
+pub use keypair::KeypairRepository;
+pub use remote_actor_cache::RemoteActorCache;
+pub use types::{BlockedDomain, Follower, FollowerStatus, FollowingStatus, Keypair, RemoteActor};

@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.5.0] — 2026-07-25
+
+### Breaking changes
+
+- `broadcast_create_note` renamed to `broadcast_create`, `broadcast_update_note` renamed to `broadcast_update`
+- `LocalObject` is now a named struct with addressing fields: `to`, `cc`, `bto`, `bcc`
+- `ApContentReader::get_local_objects_page` returns `Vec<LocalObject>` instead of `Vec<(Url, Value, DateTime)>`
+- `Error` is now a thiserror enum with `NotFound` / `BadRequest` / `Unauthorized` / `Forbidden` / `Internal` variants
+- Repository traits split into sub-traits — `FollowRepository` is now a supertrait of `FollowerWriter`, `FollowerReader`, `FollowingWriter`, `FollowingReader`, `FollowMigration`; `ActorRepository` is a supertrait of `KeypairRepository`, `RemoteActorCache`, `AnnounceRepository`. Existing consumers implementing the supertrait continue to work unchanged.
+- `ActorRepository::save_local_actor_keypair` now takes a `Keypair` named struct instead of two strings
+- `NoteType` re-export removed
+- Internal modules (`activities`, `actors`, `handlers`, `data`, `content`, `error`, `user`, `federation`) are now `pub(crate)`
+- `get_following_outbox_url` removed (dead code)
+
+### New features
+
+- `UrlScheme` trait + `DefaultUrlScheme` — configurable URL patterns via `.url_scheme(Arc::new(MyScheme))` on the builder
+- `broadcast_raw_to_followers` — send arbitrary AP activity JSON to all accepted followers
+- `on_unknown_activity` hook on `ApObjectHandler` — handle custom AP extensions (EmojiReact, Question, Flag, etc.)
+- `DbActor::object_id()` convenience method
+- `RemoteActor::from_ap_person()`, `RemoteActor::placeholder()` constructors
+- Mock builder framework: `MockFollowRepoBuilder`, `MockActorRepoBuilder`, `MockBlocklistRepoBuilder`, `MockActivityRepoBuilder`, `MockUserRepoBuilder`, `MockContentReaderBuilder`, `MockObjectHandlerBuilder`, `MockEventPublisherBuilder`
+- `Keypair` named struct (was anonymous tuple)
+- `LocalObject` named struct with addressing (was anonymous tuple)
+- `FollowMigration::migrate_follower_actor` has a default no-op implementation
+- `actor_handler`, `followers_handler`, `following_handler` re-exported for custom router construction
+- Constants: `AP_CONTENT_TYPE`, `AP_CONTEXT`, `INBOX_BODY_LIMIT`
+
+### Bug fixes / security
+
+- Fix SSRF bypass via IPv6-mapped IPv4 addresses
+- Block additional reserved IP ranges (TEST-NET, benchmarking, reserved, IPv6 documentation)
+- `verify_attributed_to` now rejects missing `attributedTo` and handles array form
+- Signature failures return 401 instead of 500
+- Remove `.expect()` panics from outbox handler
+- Unknown activity types accepted gracefully instead of returning 500
+
+### Internal improvements
+
+- thiserror enum for `Error` type (41 boilerplate `.map_err` calls eliminated)
+- File organization: `handlers/`, `actors/`, `service/` with `types.rs` per module
+- `mock_repo!` macro replaces 980 lines of hand-written mocks
+- Small focused functions and descriptive variable names throughout
+
+---
+
 ## [0.4.6] — 2026-07-16
 
 ### New features

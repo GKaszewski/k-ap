@@ -61,11 +61,15 @@ impl ApFederationConfig {
         Ok(Self(config))
     }
 
+    fn inner(&self) -> &FederationConfig<FederationData> {
+        &self.0
+    }
+
     pub fn to_request_data(&self) -> Data<FederationData> {
-        self.0.to_request_data()
+        self.inner().to_request_data()
     }
 
     pub fn middleware(&self) -> FederationMiddleware<FederationData> {
-        FederationMiddleware::new(self.0.clone())
+        FederationMiddleware::new(self.inner().clone())
     }
 }

@@ -39,15 +39,13 @@ impl Activity for FollowActivity {
             (Some(host), Some(port)) => format!("{}:{}", host, port),
             (Some(host), None) => host.to_string(),
             _ => {
-                return Err(Error::bad_request(anyhow::anyhow!(
-                    "invalid follow target URL"
-                )));
+                return Err(Error::bad_request("invalid follow target URL"));
             }
         };
         if target_domain == data.domain {
             return Ok(());
         }
-        if let Some(uuid) = crate::urls::extract_user_id_from_url(target_url)
+        if let Some(uuid) = data.url_scheme.extract_user_id(target_url)
             && data
                 .user_repo
                 .find_by_id(uuid)
@@ -59,9 +57,7 @@ impl Activity for FollowActivity {
             tracing::debug!(target = %target_url, "accepting follow for migrated actor URL");
             return Ok(());
         }
-        Err(Error::bad_request(anyhow::anyhow!(
-            "follow target is not a local actor"
-        )))
+        Err(Error::bad_request("follow target is not a local actor"))
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
@@ -69,7 +65,7 @@ impl Activity for FollowActivity {
             return Ok(());
         }
         // Actor block checked BEFORE any outbound HTTP fetch.
-        if let Some(target_user_id) = crate::urls::extract_user_id_from_url(self.object.inner())
+        if let Some(target_user_id) = data.url_scheme.extract_user_id(self.object.inner())
             && data
                 .blocklist_repo
                 .is_actor_blocked(target_user_id, self.actor.inner().as_str())

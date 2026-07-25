@@ -47,19 +47,28 @@ impl Activity for BlockActivity {
             return Ok(());
         }
         let actor_url = self.actor.inner().as_str();
-        if let Some(local_user_id) = crate::urls::extract_user_id_from_url(&self.object) {
-            let _ = data
+        if let Some(local_user_id) = data.url_scheme.extract_user_id(&self.object) {
+            if let Err(error) = data
                 .follow_repo
                 .remove_following(local_user_id, actor_url)
-                .await;
-            let _ = data
+                .await
+            {
+                tracing::debug!(%error, "following already removed");
+            }
+            if let Err(error) = data
                 .follow_repo
                 .remove_follower(local_user_id, actor_url)
-                .await;
-            let _ = data
+                .await
+            {
+                tracing::debug!(%error, "follower already removed");
+            }
+            if let Err(error) = data
                 .blocklist_repo
                 .add_blocked_actor(local_user_id, actor_url)
-                .await;
+                .await
+            {
+                tracing::warn!(%error, "failed to record block");
+            }
         }
         tracing::info!(actor = %actor_url, "received block — removed relationships, recorded in blocklist");
         Ok(())

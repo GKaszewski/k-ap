@@ -36,9 +36,9 @@ impl Activity for AcceptActivity {
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if self.actor.inner() != self.object.object.inner() {
-            return Err(Error::bad_request(anyhow::anyhow!(
-                "Accept actor does not match Follow target"
-            )));
+            return Err(Error::bad_request(
+                "Accept actor does not match Follow target",
+            ));
         }
         Ok(())
     }
@@ -47,8 +47,10 @@ impl Activity for AcceptActivity {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
-        let local_user_id = crate::urls::extract_user_id_from_url(self.object.actor.inner())
-            .ok_or_else(|| Error::bad_request(anyhow::anyhow!("invalid actor URL in Follow")))?;
+        let local_user_id = data
+            .url_scheme
+            .extract_user_id(self.object.actor.inner())
+            .ok_or_else(|| Error::bad_request("invalid actor URL in Follow"))?;
         let remote_actor_url = self.actor.inner().as_str().to_string();
         data.follow_repo
             .update_following_status(local_user_id, &remote_actor_url, FollowingStatus::Accepted)
@@ -62,14 +64,17 @@ impl Activity for AcceptActivity {
                 .await
                 .ok()
                 .flatten()
-                .and_then(|a| a.outbox_url);
-            let _ = publisher
+                .and_then(|actor| actor.outbox_url);
+            if let Err(error) = publisher
                 .publish(crate::data::FederationEvent::OutboundFollowAccepted {
                     local_user_id,
                     remote_actor_url,
                     outbox_url,
                 })
-                .await;
+                .await
+            {
+                tracing::warn!(%error, "failed to publish OutboundFollowAccepted event");
+            }
         }
         Ok(())
     }

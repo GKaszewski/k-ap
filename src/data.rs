@@ -4,6 +4,7 @@ use crate::content::{ApContentReader, ApObjectHandler};
 use crate::repository::{
     ActivityRepository, ActorRepository, BlocklistRepository, FollowRepository,
 };
+use crate::url_scheme::UrlScheme;
 use crate::user::ApUserRepository;
 
 /// Typed event emitted by the federation layer.
@@ -71,6 +72,7 @@ pub struct FederationData {
     pub(crate) software_name: String,
     pub(crate) event_publisher: Option<Arc<dyn EventPublisher>>,
     pub(crate) actor_cache_ttl: std::time::Duration,
+    pub(crate) url_scheme: Arc<dyn UrlScheme>,
     pub(crate) nodeinfo_services_inbound: Vec<String>,
     pub(crate) nodeinfo_services_outbound: Vec<String>,
     pub(crate) nodeinfo_metadata: serde_json::Value,
@@ -78,7 +80,7 @@ pub struct FederationData {
 
 impl FederationData {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         activity_repo: Arc<dyn ActivityRepository>,
         follow_repo: Arc<dyn FollowRepository>,
         actor_repo: Arc<dyn ActorRepository>,
@@ -91,6 +93,7 @@ impl FederationData {
         software_name: String,
         event_publisher: Option<Arc<dyn EventPublisher>>,
         actor_cache_ttl: std::time::Duration,
+        url_scheme: Arc<dyn UrlScheme>,
     ) -> Self {
         let domain = base_url
             .trim_start_matches("https://")
@@ -113,6 +116,7 @@ impl FederationData {
             software_name,
             event_publisher,
             actor_cache_ttl,
+            url_scheme,
             nodeinfo_services_inbound: vec![],
             nodeinfo_services_outbound: vec![],
             nodeinfo_metadata: serde_json::json!({}),

@@ -6,7 +6,7 @@ use crate::actors::DbActor;
 use crate::data::FederationData;
 use crate::error::Error;
 
-use super::helpers::check_guards;
+use super::helpers::{check_guards, extract_object_ap_id, verify_attributed_to};
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[serde(rename = "Add")]
@@ -39,34 +39,18 @@ impl Activity for AddActivity {
     }
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
-        if let Some(attributed_to) = self.object.get("attributedTo").and_then(|v| v.as_str())
-            && let Ok(attributed_url) = Url::parse(attributed_to)
-            && &attributed_url != self.actor.inner()
-        {
-            return Err(Error::bad_request(anyhow::anyhow!(
-                "Add actor does not match object attributedTo"
-            )));
-        }
-        Ok(())
+        verify_attributed_to(&self.object, self.actor.inner(), "Add")
     }
 
     async fn receive(self, data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
-        // Use the object's own id as the stable AP identifier, falling back to
-        // the activity id only if the object has no id field.
-        let ap_id = self
-            .object
-            .get("id")
-            .and_then(|v| v.as_str())
-            .and_then(|s| Url::parse(s).ok())
-            .unwrap_or_else(|| self.id.clone());
+        let ap_id = extract_object_ap_id(&self.object, &self.id);
         let actor_url = self.actor.inner().clone();
         data.object_handler
             .on_create(&ap_id, &actor_url, self.object)
-            .await
-            .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
+            .await?;
         tracing::info!(actor = %actor_url, "received Add activity");
         Ok(())
     }

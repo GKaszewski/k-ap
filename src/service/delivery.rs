@@ -84,28 +84,32 @@ impl Activity for RawActivity {
 }
 
 impl ActivityPubService {
-    /// Route deliveries to the EventPublisher (one DeliveryRequested event per inbox)
-    /// or fall back to a fire-and-forget tokio::spawn.
-    /// `pub(crate)` so sibling modules (broadcast.rs, follow.rs) can call it on `self`.
-    pub(crate) async fn dispatch_deliveries(
+    /// Dispatch pre-built `SendActivityTask`s via the event publisher (if configured)
+    /// or by spawning a background retry loop.
+    fn dispatch_sends(
         &self,
         data: &activitypub_federation::config::Data<FederationData>,
         local_actor: &DbActor,
         inboxes: Vec<Url>,
         sends: Vec<SendActivityTask>,
         activity_json: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    ) {
         if let Some(publisher) = data.event_publisher.as_ref() {
-            for inbox in inboxes {
-                let event = FederationEvent::DeliveryRequested {
-                    inbox,
-                    activity: activity_json.clone(),
-                    signing_actor_id: local_actor.user_id,
-                };
-                if let Err(e) = publisher.publish(event).await {
-                    tracing::warn!(error = %e, "failed to enqueue DeliveryRequested event");
+            let publisher = publisher.clone();
+            let signing_actor_id = local_actor.user_id;
+            let activity = activity_json;
+            tokio::spawn(async move {
+                for inbox in inboxes {
+                    let event = FederationEvent::DeliveryRequested {
+                        inbox,
+                        activity: activity.clone(),
+                        signing_actor_id,
+                    };
+                    if let Err(error) = publisher.publish(event).await {
+                        tracing::warn!(%error, "failed to enqueue DeliveryRequested event");
+                    }
                 }
-            }
+            });
         } else {
             let data = data.clone();
             let max_attempts = self.delivery_max_attempts;
@@ -117,7 +121,6 @@ impl ActivityPubService {
                 }
             });
         }
-        Ok(())
     }
 
     /// Deliver a single outbound activity to `inbox`.
@@ -129,9 +132,8 @@ impl ActivityPubService {
         signing_actor_id: uuid::Uuid,
     ) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        let actor = get_local_actor(signing_actor_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let actor = get_local_actor(signing_actor_id, &data).await?;
+
         let id = activity
             .get("id")
             .and_then(|v| v.as_str())
@@ -147,6 +149,7 @@ impl ActivityPubService {
             actor_url,
             value: activity.clone(),
         };
+
         let sends = SendActivityTask::prepare(&raw, &actor, vec![inbox.clone()], &data).await?;
         let failures = send_with_retry(
             sends,
@@ -158,34 +161,35 @@ impl ActivityPubService {
         if failures.is_empty() {
             return Ok(());
         }
+
         let error_msg = failures
             .iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join("; ");
-        if let Some(publisher) = data.event_publisher.as_ref() {
-            let _ = publisher
+
+        if let Some(publisher) = data.event_publisher.as_ref()
+            && let Err(error) = publisher
                 .publish(FederationEvent::DeliveryFailed {
                     inbox,
                     activity,
                     signing_actor_id,
                     error: error_msg.clone(),
                 })
-                .await;
+                .await
+        {
+            tracing::warn!(%error, "failed to publish DeliveryFailed event");
         }
         Err(anyhow::anyhow!("delivery failed: {}", error_msg))
     }
 
-    /// Serialize `activity` to JSON and prepare `SendActivityTask` objects.
-    /// Returns `(activity_json, sends, inboxes)` so both dispatch paths have what they need.
-    /// `pub(super)` — visible to all child modules of `service` (broadcast.rs, follow.rs, etc.).
-    pub(super) async fn prepare_broadcast<A>(
+    pub(super) async fn send_activity<A>(
         &self,
         data: &activitypub_federation::config::Data<FederationData>,
         local_actor: &DbActor,
         inboxes: Vec<Url>,
         activity: A,
-    ) -> anyhow::Result<(serde_json::Value, Vec<SendActivityTask>, Vec<Url>)>
+    ) -> anyhow::Result<()>
     where
         A: Activity + Serialize + Debug + Send + Sync,
     {
@@ -194,6 +198,35 @@ impl ActivityPubService {
         let activity_json = serde_json::to_value(&with_ctx)?;
         let sends =
             SendActivityTask::prepare(&with_ctx, local_actor, inboxes.clone(), data).await?;
-        Ok((activity_json, sends, inboxes))
+        self.dispatch_sends(data, local_actor, inboxes, sends, activity_json);
+        Ok(())
+    }
+
+    pub(super) async fn send_raw_activity(
+        &self,
+        data: &activitypub_federation::config::Data<FederationData>,
+        local_actor: &DbActor,
+        inboxes: Vec<Url>,
+        activity: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let id = activity
+            .get("id")
+            .and_then(|value| value.as_str())
+            .and_then(|id_str| Url::parse(id_str).ok())
+            .unwrap_or_else(|| local_actor.ap_id.clone());
+        let actor_url = activity
+            .get("actor")
+            .and_then(|value| value.as_str())
+            .and_then(|actor_str| Url::parse(actor_str).ok())
+            .unwrap_or_else(|| local_actor.ap_id.clone());
+
+        let raw = RawActivity {
+            id,
+            actor_url,
+            value: activity.clone(),
+        };
+        let sends = SendActivityTask::prepare(&raw, local_actor, inboxes.clone(), data).await?;
+        self.dispatch_sends(data, local_actor, inboxes, sends, activity);
+        Ok(())
     }
 }

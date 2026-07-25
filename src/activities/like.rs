@@ -57,8 +57,7 @@ impl Activity for LikeActivity {
         }
         data.object_handler
             .on_like(&self.object, self.actor.inner())
-            .await
-            .map_err(|e| Error::from(anyhow::anyhow!(e)))?;
+            .await?;
         tracing::info!(actor = %self.actor.inner(), object = %self.object, "received like");
         Ok(())
     }

@@ -6,7 +6,6 @@ use crate::{
     actors::get_local_actor,
     data::FederationData,
     repository::{FollowerStatus, FollowingStatus, RemoteActor},
-    urls::activity_url,
 };
 
 use super::ActivityPubService;
@@ -19,51 +18,26 @@ impl ActivityPubService {
         if parts.len() == 2 && parts[1] == data.domain {
             return self.follow_local(local_user_id, parts[0], &data).await;
         }
+
         let remote_actor = self.webfinger_https(handle, &data).await?;
-        let local_actor = get_local_actor(local_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        let follow_id = activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(local_user_id, &data).await?;
+        let follow_id = data.url_scheme.activity_url(&self.base_url)?;
         let follow_id_str = follow_id.to_string();
-        let remote = RemoteActor {
-            url: remote_actor.ap_id.to_string(),
-            handle: format!(
-                "{}@{}",
-                remote_actor.username,
-                remote_actor.ap_id.host_str().unwrap_or("")
-            ),
-            inbox_url: remote_actor.inbox_url.to_string(),
-            shared_inbox_url: remote_actor
-                .shared_inbox_url
-                .as_ref()
-                .map(|u| u.to_string()),
-            display_name: remote_actor
-                .display_name
-                .clone()
-                .or_else(|| Some(remote_actor.username.clone())),
-            avatar_url: remote_actor.avatar_url.as_ref().map(|u| u.to_string()),
-            outbox_url: Some(remote_actor.outbox_url.to_string()),
-            bio: remote_actor.bio.clone(),
-            banner_url: remote_actor.banner_url.as_ref().map(|u| u.to_string()),
-            followers_url: Some(remote_actor.followers_url.to_string()),
-            following_url: Some(remote_actor.following_url.to_string()),
-            also_known_as: remote_actor.also_known_as.clone(),
-            fetched_at: Some(chrono::Utc::now()),
-        };
+        let remote = RemoteActor::from(&remote_actor);
+
         // Save BEFORE delivering — prevents lost state on process restart.
         data.follow_repo
             .add_following(local_user_id, remote, &follow_id_str)
             .await?;
+
         let follow = FollowActivity {
             id: Url::parse(&follow_id_str)?,
             kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
+            actor: local_actor.object_id(),
             object: ObjectId::from(remote_actor.ap_id.clone()),
         };
-        let (json, sends, inboxes) = self
-            .prepare_broadcast(&data, &local_actor, vec![remote_actor.inbox()], follow)
-            .await?;
-        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+
+        self.send_activity(&data, &local_actor, vec![remote_actor.inbox()], follow)
             .await
     }
 
@@ -78,14 +52,13 @@ impl ActivityPubService {
                 .unfollow_local(local_user_id, actor_url_str, &data)
                 .await;
         }
+
         let remote = data
             .actor_repo
             .get_remote_actor(actor_url_str)
             .await?
             .ok_or_else(|| anyhow::anyhow!("remote actor not found: {}", actor_url_str))?;
-        let local_actor = get_local_actor(local_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(local_user_id, &data).await?;
         let remote_ap_id = Url::parse(actor_url_str)?;
         let inbox = Url::parse(&remote.inbox_url)?;
         let follow_id = data
@@ -94,25 +67,27 @@ impl ActivityPubService {
             .await?
             .and_then(|id| Url::parse(&id).ok())
             .unwrap_or_else(|| {
-                activity_url(&self.base_url).unwrap_or_else(|_| remote_ap_id.clone())
+                data.url_scheme
+                    .activity_url(&self.base_url)
+                    .unwrap_or_else(|_| remote_ap_id.clone())
             });
+
         let follow = FollowActivity {
             id: follow_id,
             kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
+            actor: local_actor.object_id(),
             object: ObjectId::from(remote_ap_id),
         };
         let undo = UndoActivity {
-            id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+            id: data.url_scheme.activity_url(&self.base_url)?,
             kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
-            object: serde_json::to_value(&follow).map_err(|e| anyhow::anyhow!("{e}"))?,
+            actor: local_actor.object_id(),
+            object: serde_json::to_value(&follow)?,
         };
-        let (json, sends, inboxes) = self
-            .prepare_broadcast(&data, &local_actor, vec![inbox], undo)
+
+        self.send_activity(&data, &local_actor, vec![inbox], undo)
             .await?;
-        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
-            .await?;
+
         data.follow_repo
             .remove_following(local_user_id, actor_url_str)
             .await?;
@@ -128,9 +103,7 @@ impl ActivityPubService {
         remote_actor_url: &str,
     ) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        let local_actor = get_local_actor(local_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(local_user_id, &data).await?;
         let remote_actor = data
             .actor_repo
             .get_remote_actor(remote_actor_url)
@@ -143,27 +116,27 @@ impl ActivityPubService {
             .ok_or_else(|| {
                 anyhow::anyhow!("follow activity id not found for {}", remote_actor_url)
             })?;
+
         let follow = FollowActivity {
             id: Url::parse(&follow_id_str)?,
             kind: Default::default(),
             actor: ObjectId::from(Url::parse(remote_actor_url)?),
-            object: ObjectId::from(local_actor.ap_id.clone()),
+            object: local_actor.object_id(),
         };
         let accept = AcceptActivity {
-            id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+            id: data.url_scheme.activity_url(&self.base_url)?,
             kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
+            actor: local_actor.object_id(),
             object: follow,
         };
+
         data.follow_repo
             .update_follower_status(local_user_id, remote_actor_url, FollowerStatus::Accepted)
             .await?;
         let inbox = Url::parse(&remote_actor.inbox_url)?;
-        let (json, sends, inboxes) = self
-            .prepare_broadcast(&data, &local_actor, vec![inbox], accept)
+        self.send_activity(&data, &local_actor, vec![inbox], accept)
             .await?;
-        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
-            .await?;
+
         let target_inbox = remote_actor
             .shared_inbox_url
             .clone()
@@ -178,32 +151,30 @@ impl ActivityPubService {
         remote_actor_url: &str,
     ) -> anyhow::Result<()> {
         let data = self.federation_config.to_request_data();
-        let local_actor = get_local_actor(local_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(local_user_id, &data).await?;
         let remote_actor = data
             .actor_repo
             .get_remote_actor(remote_actor_url)
             .await?
             .ok_or_else(|| anyhow::anyhow!("remote actor not found"))?;
+
         let follow = FollowActivity {
-            id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+            id: data.url_scheme.activity_url(&self.base_url)?,
             kind: Default::default(),
             actor: ObjectId::from(Url::parse(remote_actor_url)?),
-            object: ObjectId::from(local_actor.ap_id.clone()),
+            object: local_actor.object_id(),
         };
         let reject = RejectActivity {
-            id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+            id: data.url_scheme.activity_url(&self.base_url)?,
             kind: Default::default(),
-            actor: ObjectId::from(local_actor.ap_id.clone()),
+            actor: local_actor.object_id(),
             object: follow,
         };
+
         let inbox = Url::parse(&remote_actor.inbox_url)?;
-        let (json, sends, inboxes) = self
-            .prepare_broadcast(&data, &local_actor, vec![inbox], reject)
+        self.send_activity(&data, &local_actor, vec![inbox], reject)
             .await?;
-        self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
-            .await?;
+
         data.follow_repo
             .remove_follower(local_user_id, remote_actor_url)
             .await?;
@@ -243,8 +214,8 @@ impl ActivityPubService {
             .get_followers(local_user_id)
             .await?
             .into_iter()
-            .filter(|f| f.status == FollowerStatus::Accepted)
-            .map(|f| f.actor)
+            .filter(|follower| follower.status == FollowerStatus::Accepted)
+            .map(|follower| follower.actor)
             .collect())
     }
 
@@ -292,29 +263,32 @@ impl ActivityPubService {
         data.blocklist_repo
             .add_blocked_actor(local_user_id, actor_url)
             .await?;
-        let _ = data
+        if let Err(error) = data
             .follow_repo
             .remove_follower(local_user_id, actor_url)
-            .await;
-        let _ = data
+            .await
+        {
+            tracing::debug!(%error, "follower already removed");
+        }
+        if let Err(error) = data
             .follow_repo
             .remove_following(local_user_id, actor_url)
-            .await;
-        let local_actor = get_local_actor(local_user_id, &data)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        {
+            tracing::debug!(%error, "following already removed");
+        }
+
+        let local_actor = get_local_actor(local_user_id, &data).await?;
         if let Ok(Some(remote_actor)) = data.actor_repo.get_remote_actor(actor_url).await {
             let block = crate::activities::BlockActivity {
-                id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+                id: data.url_scheme.activity_url(&self.base_url)?,
                 kind: Default::default(),
-                actor: ObjectId::from(local_actor.ap_id.clone()),
+                actor: local_actor.object_id(),
                 object: Url::parse(actor_url)?,
             };
+
             let inbox = Url::parse(&remote_actor.inbox_url)?;
-            let (json, sends, inboxes) = self
-                .prepare_broadcast(&data, &local_actor, vec![inbox], block)
-                .await?;
-            self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            self.send_activity(&data, &local_actor, vec![inbox], block)
                 .await?;
         }
         Ok(())
@@ -329,27 +303,24 @@ impl ActivityPubService {
         data.blocklist_repo
             .remove_blocked_actor(local_user_id, actor_url)
             .await?;
-        let local_actor = get_local_actor(local_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let local_actor = get_local_actor(local_user_id, &data).await?;
         if let Ok(Some(remote_actor)) = data.actor_repo.get_remote_actor(actor_url).await {
             let block = crate::activities::BlockActivity {
-                id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+                id: data.url_scheme.activity_url(&self.base_url)?,
                 kind: Default::default(),
-                actor: ObjectId::from(local_actor.ap_id.clone()),
+                actor: local_actor.object_id(),
                 object: Url::parse(actor_url)?,
             };
             let undo = UndoActivity {
-                id: activity_url(&self.base_url).map_err(|e| anyhow::anyhow!("{e}"))?,
+                id: data.url_scheme.activity_url(&self.base_url)?,
                 kind: Default::default(),
-                actor: ObjectId::from(local_actor.ap_id.clone()),
-                object: serde_json::to_value(&block).map_err(|e| anyhow::anyhow!("{e}"))?,
+                actor: local_actor.object_id(),
+                object: serde_json::to_value(&block)?,
             };
+
             let inbox = Url::parse(&remote_actor.inbox_url)?;
-            let (json, sends, inboxes) = self
-                .prepare_broadcast(&data, &local_actor, vec![inbox], undo)
-                .await?;
-            self.dispatch_deliveries(&data, &local_actor, inboxes, sends, json)
+            self.send_activity(&data, &local_actor, vec![inbox], undo)
                 .await?;
             tracing::info!(actor = %actor_url, "sent Undo(Block)");
         }
@@ -368,22 +339,8 @@ impl ActivityPubService {
         let mut actors = Vec::new();
         for url in actor_urls {
             let actor = match data.actor_repo.get_remote_actor(&url).await {
-                Ok(Some(a)) => a,
-                _ => RemoteActor {
-                    url: url.clone(),
-                    handle: url.clone(),
-                    inbox_url: url.clone(),
-                    shared_inbox_url: None,
-                    display_name: None,
-                    avatar_url: None,
-                    outbox_url: None,
-                    bio: None,
-                    banner_url: None,
-                    followers_url: None,
-                    following_url: None,
-                    also_known_as: vec![],
-                    fetched_at: None,
-                },
+                Ok(Some(cached)) => cached,
+                _ => RemoteActor::placeholder(url),
             };
             actors.push(actor);
         }
@@ -404,11 +361,14 @@ impl ActivityPubService {
         if target.id == local_user_id {
             return Err(anyhow::anyhow!("cannot follow yourself"));
         }
-        let follower_actor_url = crate::urls::actor_url(&self.base_url, local_user_id).to_string();
-        let target_actor_url = crate::urls::actor_url(&self.base_url, target.id);
-        let follow_id = activity_url(&self.base_url)
-            .map_err(|e| anyhow::anyhow!("{e}"))?
+
+        let follower_actor_url = data
+            .url_scheme
+            .actor_url(&self.base_url, local_user_id)?
             .to_string();
+        let target_actor_url = data.url_scheme.actor_url(&self.base_url, target.id)?;
+        let follow_id = data.url_scheme.activity_url(&self.base_url)?.to_string();
+
         data.follow_repo
             .add_follower(
                 target.id,
@@ -417,21 +377,31 @@ impl ActivityPubService {
                 &follow_id,
             )
             .await?;
+
         let target_as_remote = RemoteActor {
             url: target_actor_url.to_string(),
             handle: format!("{}@{}", target.username, data.domain),
-            inbox_url: format!("{}/inbox", target_actor_url),
+            inbox_url: data.url_scheme.inbox_url(&target_actor_url)?.to_string(),
             shared_inbox_url: None,
             display_name: target.display_name.or(Some(target.username)),
-            avatar_url: target.avatar_url.as_ref().map(|u| u.to_string()),
-            outbox_url: Some(format!("{}/outbox", target_actor_url)),
+            avatar_url: target.avatar_url.as_ref().map(|url| url.to_string()),
+            outbox_url: Some(data.url_scheme.outbox_url(&target_actor_url)?.to_string()),
             bio: target.bio,
-            banner_url: target.banner_url.as_ref().map(|u| u.to_string()),
-            followers_url: Some(format!("{}/followers", target_actor_url)),
-            following_url: Some(format!("{}/following", target_actor_url)),
+            banner_url: target.banner_url.as_ref().map(|url| url.to_string()),
+            followers_url: Some(
+                data.url_scheme
+                    .followers_url(&target_actor_url)?
+                    .to_string(),
+            ),
+            following_url: Some(
+                data.url_scheme
+                    .following_url(&target_actor_url)?
+                    .to_string(),
+            ),
             also_known_as: target.also_known_as,
             fetched_at: None,
         };
+
         data.follow_repo
             .add_following(local_user_id, target_as_remote, &follow_id)
             .await?;
@@ -442,6 +412,7 @@ impl ActivityPubService {
                 FollowingStatus::Accepted,
             )
             .await?;
+
         tracing::info!(follower = %local_user_id, followee = %target.id, "local follow");
         Ok(())
     }
@@ -453,15 +424,22 @@ impl ActivityPubService {
         data: &activitypub_federation::config::Data<FederationData>,
     ) -> anyhow::Result<()> {
         let target_url = Url::parse(target_actor_url)?;
-        let target_user_id = crate::urls::extract_user_id_from_url(&target_url)
+        let target_user_id = data
+            .url_scheme
+            .extract_user_id(&target_url)
             .ok_or_else(|| anyhow::anyhow!("invalid local actor URL: {}", target_actor_url))?;
-        let local_actor_url = crate::urls::actor_url(&self.base_url, local_user_id).to_string();
+        let local_actor_url = data
+            .url_scheme
+            .actor_url(&self.base_url, local_user_id)?
+            .to_string();
+
         data.follow_repo
             .remove_follower(target_user_id, &local_actor_url)
             .await?;
         data.follow_repo
             .remove_following(local_user_id, target_actor_url)
             .await?;
+
         tracing::info!(follower = %local_user_id, followee = %target_user_id, "local unfollow");
         Ok(())
     }

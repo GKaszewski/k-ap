@@ -1,3 +1,4 @@
+use super::types::{ApImageObject, Endpoints};
 use super::*;
 
 // ── Person AP JSON serialization ──────────────────────────────────────────────

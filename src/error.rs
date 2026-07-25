@@ -1,44 +1,70 @@
-use std::fmt::{Display, Formatter};
-
 use axum::http::StatusCode;
 
-#[derive(Debug)]
-pub struct Error(pub(crate) anyhow::Error, pub(crate) StatusCode);
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
 
 impl Error {
-    pub fn not_found(e: impl Into<anyhow::Error>) -> Self {
-        Self(e.into(), StatusCode::NOT_FOUND)
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self::NotFound(message.into())
     }
 
-    pub fn bad_request(e: impl Into<anyhow::Error>) -> Self {
-        Self(e.into(), StatusCode::BAD_REQUEST)
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::BadRequest(message.into())
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self::Unauthorized(message.into())
+    }
+
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::Forbidden(message.into())
     }
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
+impl From<activitypub_federation::error::Error> for Error {
+    fn from(error: activitypub_federation::error::Error) -> Self {
+        use activitypub_federation::error::Error as FedError;
 
-impl<T> From<T> for Error
-where
-    T: Into<anyhow::Error>,
-{
-    fn from(t: T) -> Self {
-        Error(t.into(), StatusCode::INTERNAL_SERVER_ERROR)
+        match &error {
+            FedError::ActivitySignatureInvalid | FedError::ActivityBodyDigestInvalid => {
+                Self::Unauthorized(error.to_string())
+            }
+            _ => Self::Internal(error.into()),
+        }
     }
 }
 
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
-        let status = self.1;
-        // Always log the real error internally; never expose it to the client.
+        let status = match &self {
+            Error::NotFound(_) => StatusCode::NOT_FOUND,
+            Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Error::Forbidden(_) => StatusCode::FORBIDDEN,
+            Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
         if status.is_server_error() {
-            tracing::error!(error = %self.0, status = status.as_u16(), "federation error");
+            tracing::error!(error = %self, status = status.as_u16(), "federation error");
         } else {
-            tracing::debug!(error = %self.0, status = status.as_u16(), "federation client error");
+            tracing::debug!(error = %self, status = status.as_u16(), "federation client error");
         }
+
         let body = match status {
             StatusCode::NOT_FOUND => "not found",
             StatusCode::BAD_REQUEST => "bad request",

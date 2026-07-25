@@ -14,8 +14,8 @@ pub async fn actor_handler(
     Path(user_id_str): Path<String>,
     data: Data<FederationData>,
 ) -> Result<FederationJson<WithContext<Person>>, Error> {
-    let user_id = uuid::Uuid::parse_str(&user_id_str)
-        .map_err(|_| Error::not_found(anyhow::anyhow!("user not found")))?;
+    let user_id =
+        uuid::Uuid::parse_str(&user_id_str).map_err(|_| Error::not_found("user not found"))?;
 
     let db_actor = get_local_actor(user_id, &data).await?;
     let person = db_actor.into_json(&data).await?;

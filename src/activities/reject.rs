@@ -35,9 +35,9 @@ impl Activity for RejectActivity {
 
     async fn verify(&self, _data: &Data<Self::DataType>) -> Result<(), Self::Error> {
         if self.actor.inner() != self.object.object.inner() {
-            return Err(Error::bad_request(anyhow::anyhow!(
-                "Reject actor does not match Follow target"
-            )));
+            return Err(Error::bad_request(
+                "Reject actor does not match Follow target",
+            ));
         }
         Ok(())
     }
@@ -46,7 +46,7 @@ impl Activity for RejectActivity {
         if check_guards(&self.id, self.actor.inner(), data).await? {
             return Ok(());
         }
-        if let Some(user_id) = crate::urls::extract_user_id_from_url(self.object.actor.inner()) {
+        if let Some(user_id) = data.url_scheme.extract_user_id(self.object.actor.inner()) {
             data.follow_repo
                 .remove_following(user_id, self.actor.inner().as_str())
                 .await?;

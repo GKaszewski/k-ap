@@ -1,6 +1,4 @@
-use activitypub_federation::{
-    activity_sending::SendActivityTask, fetch::object_id::ObjectId, protocol::context::WithContext,
-};
+use activitypub_federation::{activity_sending::SendActivityTask, protocol::context::WithContext};
 use url::Url;
 
 use crate::{activities::CreateActivity, actors::get_local_actor, federation::ApFederationConfig};
@@ -30,9 +28,10 @@ impl ActivityPubService {
             .build()?;
         let data = self.federation_config.to_request_data();
         let actor = url::Url::parse(actor_url)?;
+
         let root: serde_json::Value = client
             .get(outbox_url)
-            .header("Accept", "application/activity+json")
+            .header("Accept", crate::urls::AP_CONTENT_TYPE)
             .send()
             .await?
             .json()
@@ -44,6 +43,7 @@ impl ActivityPubService {
                 return Ok(());
             }
         };
+
         let mut current_url = first;
         let mut visited = std::collections::HashSet::new();
         loop {
@@ -57,9 +57,10 @@ impl ActivityPubService {
                 tracing::warn!(url = %current_url, error = %e, "backfill: SSRF check failed");
                 break;
             }
+
             let page: serde_json::Value = match client
                 .get(&current_url)
-                .header("Accept", "application/activity+json")
+                .header("Accept", crate::urls::AP_CONTENT_TYPE)
                 .send()
                 .await
             {
@@ -75,6 +76,7 @@ impl ActivityPubService {
                     break;
                 }
             };
+
             if let Some(items) = page.get("orderedItems").and_then(|v| v.as_array()) {
                 for item in items {
                     let activity_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -96,11 +98,13 @@ impl ActivityPubService {
                     }
                 }
             }
+
             match page.get("next").and_then(|v| v.as_str()) {
                 Some(next) => current_url = next.to_string(),
                 None => break,
             }
         }
+
         tracing::info!(outbox = %outbox_url, pages = visited.len(), "backfill complete");
         Ok(())
     }
@@ -150,7 +154,7 @@ impl ActivityPubService {
     }
 
     /// Execute backfill for a single follower inbox. Call this from a job-queue
-    /// consumer that received a [`FederationEvent::BackfillRequested`] event.
+    /// consumer that received a [`crate::data::FederationEvent::BackfillRequested`] event.
     ///
     /// Sends all of `owner_user_id`'s locally-authored content to `follower_inbox_url`,
     /// oldest-to-newest, with a small sleep between batches to avoid overwhelming
@@ -181,13 +185,9 @@ impl ActivityPubService {
     ) -> anyhow::Result<()> {
         const BATCH_SIZE: usize = 20;
         let data = config.to_request_data();
-        let local_actor = get_local_actor(owner_user_id, &data)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let local_actor = get_local_actor(owner_user_id, &data).await?;
         let inbox = Url::parse(&follower_inbox_url)?;
 
-        // Cursor-based pagination via get_local_objects_page (newest-first).
-        // Avoids loading the entire post history into memory at once.
         let mut before: Option<chrono::DateTime<chrono::Utc>> = None;
         let (mut success_count, mut failure_count, mut total) = (0usize, 0usize, 0usize);
 
@@ -202,25 +202,25 @@ impl ActivityPubService {
             }
 
             let is_last_page = page.len() < BATCH_SIZE;
-            // Advance cursor to the oldest timestamp in this page.
-            before = page.last().map(|(_, _, ts)| *ts);
+            before = page.last().map(|item| item.published_at);
 
-            for (ap_id, object_json, _ts) in &page {
+            for item in &page {
                 let create_id = Url::parse(&format!(
                     "{}/activities/create/{}",
                     base_url,
-                    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, ap_id.as_str().as_bytes())
+                    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, item.ap_id.as_str().as_bytes())
                 ))?;
                 let create = CreateActivity {
                     id: create_id,
                     kind: Default::default(),
-                    actor: ObjectId::from(local_actor.ap_id.clone()),
-                    object: object_json.clone(),
-                    to: vec![],
-                    cc: vec![],
+                    actor: local_actor.object_id(),
+                    object: item.object.clone(),
+                    to: item.to.clone(),
+                    cc: item.cc.clone(),
                     bto: vec![],
                     bcc: vec![],
                 };
+
                 let sends = SendActivityTask::prepare(
                     &WithContext::new_default(create),
                     &local_actor,
@@ -228,6 +228,7 @@ impl ActivityPubService {
                     &data,
                 )
                 .await?;
+
                 total += 1;
                 if send_with_retry(sends, &data, max_attempts, initial_delay)
                     .await

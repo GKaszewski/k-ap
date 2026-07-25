@@ -16,27 +16,22 @@ pub async fn featured_handler(
     Path(user_id_str): Path<String>,
     data: Data<FederationData>,
 ) -> Result<FederationJson<serde_json::Value>, Error> {
-    let user_id = uuid::Uuid::parse_str(&user_id_str)
-        .map_err(|_| Error::not_found(anyhow::anyhow!("user not found")))?;
+    let user_id =
+        uuid::Uuid::parse_str(&user_id_str).map_err(|_| Error::not_found("user not found"))?;
 
     data.user_repo
         .find_by_id(user_id)
-        .await
-        .map_err(Error::from)?
-        .ok_or_else(|| Error::not_found(anyhow::anyhow!("user not found")))?;
+        .await?
+        .ok_or_else(|| Error::not_found("user not found"))?;
 
     let featured_url = format!("{}/users/{}/featured", data.base_url, user_id_str);
-    let items = data
-        .content_reader
-        .get_featured_objects(user_id)
-        .await
-        .map_err(|e| Error::from(anyhow::anyhow!("{}", e)))?;
+    let items = data.content_reader.get_featured_objects(user_id).await?;
 
     Ok(FederationJson(json!({
         "@context": AP_CONTEXT,
         "type": "OrderedCollection",
         "id": featured_url,
         "totalItems": items.len(),
-        "orderedItems": items.iter().map(|u| u.as_str()).collect::<Vec<_>>(),
+        "orderedItems": items.iter().map(|url| url.as_str()).collect::<Vec<_>>(),
     })))
 }

@@ -2,6 +2,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use url::Url;
 
+#[derive(Debug, Clone)]
+pub struct LocalObject {
+    pub ap_id: Url,
+    pub object: serde_json::Value,
+    pub published_at: DateTime<Utc>,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bto: Vec<String>,
+    pub bcc: Vec<String>,
+}
+
 /// Read side — the library queries this when sending content outward.
 /// Implement on the same struct as [`ApObjectHandler`] if you prefer a single
 /// database type.
@@ -9,7 +20,6 @@ use url::Url;
 pub trait ApContentReader: Send + Sync {
     /// Newest-first page of locally-authored objects for `user_id`, published
     /// strictly before `before` (pass `None` for the first page).
-    /// Returns `(ap_id, object_json, published_at)` tuples.
     ///
     /// Used by the outbox endpoint and by backfill when a new follower is
     /// accepted. Implementations MUST:
@@ -21,7 +31,7 @@ pub trait ApContentReader: Send + Sync {
         user_id: uuid::Uuid,
         before: Option<DateTime<Utc>>,
         limit: usize,
-    ) -> anyhow::Result<Vec<(Url, serde_json::Value, DateTime<Utc>)>>;
+    ) -> anyhow::Result<Vec<LocalObject>>;
 
     /// Total locally-authored posts across all users. Used by NodeInfo.
     async fn count_local_posts(&self) -> anyhow::Result<u64>;
@@ -91,7 +101,7 @@ pub trait ApObjectHandler: Send + Sync {
     /// A remote actor boosted (Announced) a **locally-authored** object.
     ///
     /// `object_url` is your local object's AP URL. The boost count is tracked
-    /// separately in [`crate::repository::ActorRepository::count_announces`].
+    /// separately in [`crate::repository::AnnounceRepository::count_announces`].
     async fn on_announce_received(&self, object_url: &Url, actor_url: &Url) -> anyhow::Result<()>;
 
     /// A remote actor removed their boost (`Undo(Announce)`) of a locally-authored
@@ -124,4 +134,27 @@ pub trait ApObjectHandler: Send + Sync {
         mentioned_user_uuid: uuid::Uuid,
         actor_url: &Url,
     ) -> anyhow::Result<()>;
+
+    /// An inbound activity with an unrecognized type was received.
+    ///
+    /// Override this to handle custom ActivityPub extensions (EmojiReact,
+    /// Question, Flag, etc.) that k-ap doesn't process natively.
+    /// The raw JSON and the sender's actor URL are provided.
+    ///
+    /// **Note:** The default `router()` inbox handler gracefully accepts unknown
+    /// activity types but cannot dispatch to this method due to upstream library
+    /// constraints (the raw body is consumed during signature verification).
+    /// To fully handle unknown activities, build a custom inbox handler that
+    /// pre-parses the body before passing to `receive_activity`.
+    ///
+    /// Default is a no-op — unknown activities are silently accepted.
+    async fn on_unknown_activity(
+        &self,
+        activity_type: &str,
+        activity: serde_json::Value,
+        actor_url: &Url,
+    ) -> anyhow::Result<()> {
+        let _ = (activity_type, activity, actor_url);
+        Ok(())
+    }
 }
